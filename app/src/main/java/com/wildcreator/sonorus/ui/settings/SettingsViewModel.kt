@@ -60,8 +60,12 @@ class SettingsViewModel @Inject constructor(
     val contextLimit: StateFlow<Int> = settings.contextLimit
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), CONTEXT_LIMIT_UNLIMITED)
 
-    val defaultSystemPrompt: StateFlow<String> = settings.defaultSystemPrompt
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), DEFAULT_SYSTEM_PROMPT)
+    /**
+     * null = DataStore 还没读到。不能给常量初值：首帧的默认值会先被灌进输入框并"锁住"它，
+     * 用户真正的自定义 prompt 随后到达时已被跳过，保存一次就把内置默认写了回去。
+     */
+    val defaultSystemPrompt: StateFlow<String?> = settings.defaultSystemPrompt
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val thinkingLevel: StateFlow<ThinkingLevel> = settings.thinkingLevel
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThinkingLevel.OFF)
