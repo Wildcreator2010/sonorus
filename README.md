@@ -30,12 +30,17 @@
 ```properties
 sdk.dir=<你的 Android SDK 路径>
 
+# 供根目录的 run-*.bat / build-*.bat 使用；不写则回落到环境变量 JAVA_HOME
+jdk.home=<你的 JDK 17 路径>
+
 # 可选：release 签名。缺省时 release 自动回退 debug 签名，仅供本地自测，绝不可对外分发
 RELEASE_STORE_FILE=<p12/jks 路径>
 RELEASE_STORE_PASSWORD=...
 RELEASE_KEY_ALIAS=...
 RELEASE_KEY_PASSWORD=...
 ```
+
+那五个 `.bat` 脚本只做一件事：把 `local.properties` 里的 `jdk.home` 读出来设成 `JAVA_HOME`，再 `cd /d "%~dp0"` 回到脚本自身目录执行 Gradle，因此仓库里不含任何本机绝对路径。日志同样落在项目根（`*.log`，已被 gitignore）。直接敲 `./gradlew <task>` 也可以，不依赖这些脚本。
 
 然后：
 
