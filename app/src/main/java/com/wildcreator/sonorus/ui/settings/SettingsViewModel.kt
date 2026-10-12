@@ -2,11 +2,13 @@ package com.wildcreator.sonorus.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.wildcreator.sonorus.data.backup.BackupManager
 import com.wildcreator.sonorus.data.local.RequestSummary
 import com.wildcreator.sonorus.data.prefs.CONTEXT_LIMIT_UNLIMITED
 import com.wildcreator.sonorus.data.prefs.DEFAULT_SYSTEM_PROMPT
 import com.wildcreator.sonorus.data.prefs.SettingsManager
 import com.wildcreator.sonorus.domain.agent.ThinkingLevel
+import com.wildcreator.sonorus.domain.model.BackupFile
 import com.wildcreator.sonorus.domain.repository.ProviderRepository
 import com.wildcreator.sonorus.domain.repository.StatsRepository
 import com.wildcreator.sonorus.ui.theme.FontScale
@@ -51,7 +53,8 @@ data class ProviderStatRow(
 class SettingsViewModel @Inject constructor(
     private val settings: SettingsManager,
     private val providerRepository: ProviderRepository,
-    private val statsRepository: StatsRepository
+    private val statsRepository: StatsRepository,
+    private val backup: BackupManager
 ) : ViewModel() {
 
     val contextLimit: StateFlow<Int> = settings.contextLimit
@@ -147,4 +150,62 @@ class SettingsViewModel @Inject constructor(
             _globalStats.value = statsRepository.summary(now)
         }
     }
+
+    /** 备份文件的建议名（含日期），交给 SAF 作为默认文件名 */
+    fun backupFileName(): String = backup.suggestedFileName()
+
+    /**
+     * 生成加密备份并写入 [target]。
+     * 口令只活在这一次调用里：不进 StateFlow、不写日志、不落任何文件。
+     */
+    fun exportBackup(target: android.net.Uri, passphrase: String, onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            onResult(
+                runCatching { backup.exportTo(target, passphrase) }.fold(
+                    onSuccess = {
+                        "已备份 ${it.conversations} 个会话、${it.messages} 条消息、" +
+                            "${it.providers} 个提供商（约 ${it.bytes / 1024} KB）"
+                    },
+                    onFailure = { "备份失败：${it.message ?: it.javaClass.simpleName}" }
+                )
+            )
+        }
+    }
+
+    /**
+     * 读取备份并给出恢复预告。口令不正确、文件被改、格式不符都会在这里变成可读的错误。
+     * 成功时把解出的 [BackupFile] 交回调用方暂存 —— 用户确认后才真正写库，避免解两次密。
+     */
+    fun inspectBackup(source: android.net.Uri, passphrase: String, onResult: (BackupPreview?, String?) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val file = backup.load(source, passphrase)
+                onResult(BackupPreview(file, backup.plan(file)), null)
+            } catch (e: Exception) {
+                onResult(null, e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    /** 按用户确认过的备份执行合并去重恢复 */
+    fun restoreBackup(file: BackupFile, onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            onResult(
+                runCatching { backup.apply(file) }.fold(
+                    onSuccess = {
+                        "已恢复 ${it.conversations} 个会话、${it.messages} 条消息；" +
+                            "新增 ${it.providersAdded} 个提供商、补全 ${it.keysFilled} 个密钥" +
+                            (if (it.unmatchedSkipped > 0) "；${it.unmatchedSkipped} 个会话因提供商缺失被跳过" else "")
+                    },
+                    onFailure = { "恢复失败：${it.message ?: it.javaClass.simpleName}" }
+                )
+            )
+        }
+    }
 }
+
+/** 恢复前的预览数据：解出的备份 + 与本机比对后的增减计划 */
+data class BackupPreview(
+    val file: BackupFile,
+    val plan: BackupManager.ImportPlan
+)

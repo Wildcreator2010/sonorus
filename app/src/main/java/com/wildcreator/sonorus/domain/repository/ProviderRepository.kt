@@ -17,7 +17,12 @@ interface ProviderRepository {
     /** 已保存密钥的掩码展示（末 4 位），未保存返回 null */
     suspend fun maskedApiKey(id: Long): String?
 
-    /** 按需取出一次性凭据供网络层使用；调用方不得缓存或持久化 */
+    /**
+     * 按需取出一次性凭据供网络层使用。
+     *
+     * 除用户主动发起的加密备份（见 `data/backup/BackupManager`，明文口令派生 AES-GCM 容器）之外，
+     * 调用方不得缓存、不得写进 Room、日志或 UI 状态。
+     */
     suspend fun credentials(id: Long): ProviderCredentials?
 
     /** 用草稿凭据试连并拉取模型，不落库 */
