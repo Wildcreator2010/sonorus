@@ -21,10 +21,17 @@ data class ReleaseUpdate(
 
 object ReleaseParser {
 
-    /** 允许的重定向目标主机：GitHub Releases 会 302 到 objects.githubusercontent.com */
+    /**
+     * 允许的重定向目标主机：GitHub Releases 现在 302 到 release-assets.githubusercontent.com
+     * （历史上是 objects.githubusercontent.com，两个都留着）。
+     *
+     * 注意：这个白名单目前只作用于 browser_download_url 的静态检查，OkHttp 跟随重定向后的
+     * 落点并不在此校验。把落点也纳入校验时，务必确认新主机已加入本集合 —— 否则应用内更新会全废。
+     */
     private val allowedHosts = setOf(
         "github.com",
         "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
         "api.github.com",
         "codeload.github.com"
     )

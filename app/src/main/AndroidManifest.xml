@@ -12,7 +12,8 @@
 
     <!--
       生产安全基线：
-      1) 明文流量由 network_security_config 控制（所有构建类型一律禁止，debug 未开放豁免）；
+      1) 明文流量由 network_security_config 控制：release 一律禁止，
+         debug 变体用同名文件覆盖为允许（方便连局域网自建网关）；
       2) 备份/迁移规则排除加密密钥库（Keystore 主密钥不可导出，跨设备恢复必失败），
          明文聊天库不参与云备份（见 data_extraction_rules.xml）；
       3) 明文开关不写死在 Manifest，避免 release 被覆盖；

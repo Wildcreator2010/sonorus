@@ -36,8 +36,9 @@ class UpdateClient @Inject constructor(
     val repository: String get() = "$OWNER/$REPO"
 
     private val downloadClient by lazy {
-        // GitHub 的 browser_download_url 会 302 到 objects.githubusercontent.com，
-        // 聊天用的共享客户端刻意关了重定向，这里单独开（不带任何凭据）。
+        // GitHub 的 browser_download_url 会 302 到 release-assets.githubusercontent.com
+        // （历史上是 objects.githubusercontent.com），聊天用的共享客户端刻意关了重定向，
+        // 这里单独开（不带任何凭据）。
         client.newBuilder().followRedirects(true).build()
     }
 

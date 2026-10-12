@@ -636,10 +636,15 @@ fun ChatScreen(
                                     color = MaterialTheme.colorScheme.onErrorContainer
                                 )
                                 Row {
-                                    TextButton(onClick = {
-                                        viewModel.dismissError()
-                                        if (lastSent.isNotBlank()) viewModel.send(lastSent)
-                                    }) { Text("重试") }
+                                    TextButton(
+                                        // 执行器全局单槽：别的会话在后台续写时这一轮发不出去，
+                                        // 不禁掉就会"点了毫无反应"
+                                        enabled = !runningElsewhere,
+                                        onClick = {
+                                            viewModel.dismissError()
+                                            if (lastSent.isNotBlank()) viewModel.send(lastSent)
+                                        }
+                                    ) { Text("重试") }
                                     TextButton(onClick = { viewModel.dismissError() }) { Text("忽略") }
                                 }
                             }
