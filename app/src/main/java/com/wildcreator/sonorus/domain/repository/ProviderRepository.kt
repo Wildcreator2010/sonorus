@@ -14,6 +14,12 @@ interface ProviderRepository {
     suspend fun saveProvider(draft: ProviderDraft): Long
     suspend fun deleteProvider(id: Long)
 
+    /**
+     * 该提供商名下有多少会话。删除前要拿它向用户说清"会连带删掉几个会话"，
+     * 因为删除是级联的：会话与消息会一起消失。
+     */
+    suspend fun conversationCountFor(providerId: Long): Int
+
     /** 已保存密钥的掩码展示（末 4 位），未保存返回 null */
     suspend fun maskedApiKey(id: Long): String?
 

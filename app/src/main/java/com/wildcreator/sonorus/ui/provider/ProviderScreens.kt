@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +38,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -56,6 +60,26 @@ fun ProviderListScreen(
     viewModel: ProviderListViewModel = hiltViewModel()
 ) {
     val providers by viewModel.providers.collectAsStateWithLifecycle()
+    // 删除提供商现在会级联删掉它名下的会话与消息，不可恢复，必须二次确认
+    var pendingDelete by remember { mutableStateOf<Provider?>(null) }
+
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除提供商") },
+            text = {
+                Text("确定删除「${target.name}」吗？它的模型缓存，以及挂在这个提供商下的" +
+                    "全部会话与消息都会一并删除，且无法恢复。API Key 会从加密存储中移除。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    viewModel.delete(target.id)
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -91,7 +115,7 @@ fun ProviderListScreen(
                     ProviderCard(
                         provider = provider,
                         onEdit = { onEdit(provider.id) },
-                        onDelete = { viewModel.delete(provider.id) },
+                        onDelete = { pendingDelete = provider },
                         onModels = { onModels(provider.id) }
                     )
                 }

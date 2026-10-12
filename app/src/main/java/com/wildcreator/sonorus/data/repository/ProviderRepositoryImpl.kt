@@ -1,5 +1,8 @@
 package com.wildcreator.sonorus.data.repository
 
+import androidx.room.withTransaction
+import com.wildcreator.sonorus.data.local.AppDatabase
+import com.wildcreator.sonorus.data.local.ChatDao
 import com.wildcreator.sonorus.data.local.ModelDao
 import com.wildcreator.sonorus.data.local.ModelEntity
 import com.wildcreator.sonorus.data.local.ProviderDao
@@ -22,8 +25,10 @@ import javax.inject.Inject
 import kotlin.jvm.JvmSuppressWildcards
 
 class ProviderRepositoryImpl @Inject constructor(
+    private val db: AppDatabase,
     private val providerDao: ProviderDao,
     private val modelDao: ModelDao,
+    private val chatDao: ChatDao,
     private val apiClient: ProviderApiClient,
     private val secretStore: SecretStore,
     private val adapters: Map<ProviderProtocol, @JvmSuppressWildcards ProtocolAdapter>
@@ -41,10 +46,25 @@ class ProviderRepositoryImpl @Inject constructor(
         id
     }
 
+    override suspend fun conversationCountFor(providerId: Long): Int =
+        chatDao.countConversationsForProvider(providerId)
+
+    /**
+     * 删除提供商：模型缓存、它名下的会话与消息、加密存储里的密钥，一个都不能剩。
+     *
+     * 以前只删提供商和模型，留下一堆"挂在已不存在的提供商上"的会话 ——
+     * 它们永远发不出去（credentials 取不到），用户只会觉得应用坏了。
+     * 四步写放在同一个事务里；密钥留到事务提交之后再清，
+     * 这样中途崩溃要么是"库还在、密钥也还在"，要么两边都没了，不会留半截。
+     */
     override suspend fun deleteProvider(id: Long) = withContext(Dispatchers.IO) {
+        db.withTransaction {
+            chatDao.deleteMessagesOfProvider(id)
+            chatDao.deleteConversationsOfProvider(id)
+            modelDao.deleteByProvider(id)
+            providerDao.deleteById(id)
+        }
         secretStore.remove(keyAlias(id))
-        modelDao.deleteByProvider(id)
-        providerDao.deleteById(id)
     }
 
     override suspend fun maskedApiKey(id: Long): String? =
