@@ -57,9 +57,16 @@ class KeystoreSecretStore @Inject constructor(
         }.also { prefs = it }
     }
 
+    /**
+     * 用 `commit()` 而不是 `apply()`：apply 是异步落盘，进程在这之后被杀就会静默丢掉刚存的密钥 ——
+     * 用户以为保存成功了，下次发送才报"缺少 API Key"。commit 同步返回落盘结果，
+     * 失败必须抛出去，让调用方当场告诉他没存上。
+     */
     override suspend fun put(alias: String, value: String) = withContext(Dispatchers.IO) {
         writeMutex.withLock {
-            prefs().edit().putString(alias, value).apply()
+            if (!prefs().edit().putString(alias, value).commit()) {
+                throw IllegalStateException("密钥写入失败：$alias")
+            }
         }
     }
 
@@ -69,7 +76,9 @@ class KeystoreSecretStore @Inject constructor(
 
     override suspend fun remove(alias: String) = withContext(Dispatchers.IO) {
         writeMutex.withLock {
-            prefs().edit().remove(alias).apply()
+            if (!prefs().edit().remove(alias).commit()) {
+                throw IllegalStateException("密钥删除失败：$alias")
+            }
         }
     }
 
