@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- 背景是渐变，前景是缩进安全区的 logo（帐篷 + 云） -->
-    <background android:drawable="@drawable/ic_launcher_background" />
+    <!-- 前景是 logo 原图铺满画布（注册商标，不做缩进/裁切/改色）；背景只在系统蒙版
+         切到画布外沿时露出，取 logo 自身的底色 -->
+    <background android:drawable="@color/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>
