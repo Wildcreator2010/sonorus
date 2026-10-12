@@ -101,6 +101,9 @@ class GeminiAdapter @Inject constructor(
                 request.thinkingLevel.geminiBudget()?.let { budget ->
                     putJsonObject("thinkingConfig") {
                         put("thinkingBudget", budget)
+                        // 必须显式要，否则上游根本不回带 thought=true 的分片，
+                        // 下面的推理分支就成了永远进不去的死代码（默认只返回最终输出）
+                        put("includeThoughts", true)
                     }
                 }
             }
@@ -120,14 +123,16 @@ class GeminiAdapter @Inject constructor(
             return StreamDelta(error = it["message"].asText() ?: "Gemini 返回错误")
         }
 
-        val candidate = root["candidates"]?.jsonArray?.firstOrNull()?.jsonObject ?: return null
-        val parts = candidate.obj("content")?.get("parts")?.jsonArray ?: return null
+        val candidate = root.arr("candidates")?.firstOrNull().asObject() ?: return null
+        // 末帧经常只有 finishReason 而没有 parts。这里若早退，收尾原因就整帧丢失 ——
+        // "被 SAFETY 拦截"和"正常说完"将无法区分，半截答案会被当成完整回答。
+        val parts = candidate.obj("content")?.arr("parts")
 
         val text = StringBuilder()
         val reasoning = StringBuilder()
         val toolCalls = mutableListOf<ToolCallDelta>()
-        parts.forEach { element ->
-            val part = element.jsonObject
+        parts?.forEach { element ->
+            val part = element.asObject() ?: return@forEach
             // Gemini 2.5 在 part 上打 thought=true 标记推理文本，正文与推理共用 text 字段
             val piece = part["text"].asText()
             if (piece != null) {
@@ -143,9 +148,16 @@ class GeminiAdapter @Inject constructor(
             }
         }
 
-        // Gemini 无 tool_use 停止原因，用"本帧是否带 functionCall"判定
-        val finish = candidate["finishReason"]?.asText()?.let {
-            if (toolCalls.isNotEmpty()) FinishReason.TOOL_CALLS else FinishReason.STOP
+        // Gemini 无 tool_use 停止原因，用"本帧是否带 functionCall"判定；
+        // MAX_TOKENS / 各类安全拦截必须映射成不完整收尾，不能一律算 STOP
+        val finish = candidate["finishReason"].asText()?.let { reason ->
+            when {
+                toolCalls.isNotEmpty() -> FinishReason.TOOL_CALLS
+                reason == "MAX_TOKENS" -> FinishReason.LENGTH
+                reason in setOf("SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "RECITATION") ->
+                    FinishReason.BLOCKED
+                else -> FinishReason.STOP
+            }
         }
 
         val resultText = text.toString().takeIf { it.isNotEmpty() }

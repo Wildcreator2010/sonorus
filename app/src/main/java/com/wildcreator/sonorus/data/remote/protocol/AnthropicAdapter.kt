@@ -136,7 +136,13 @@ class AnthropicAdapter @Inject constructor(
             "message_delta" -> {
                 val stop = root.obj("delta")?.get("stop_reason").asText()
                 StreamDelta(
-                    finish = if (stop == "tool_use") FinishReason.TOOL_CALLS else FinishReason.STOP
+                    // max_tokens 收尾意味着答案被截断，不能当正常说完
+                    finish = when (stop) {
+                        "tool_use" -> FinishReason.TOOL_CALLS
+                        "max_tokens" -> FinishReason.LENGTH
+                        "refusal" -> FinishReason.BLOCKED
+                        else -> FinishReason.STOP
+                    }
                 )
             }
             "error" -> StreamDelta(
