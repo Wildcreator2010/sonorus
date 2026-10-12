@@ -262,24 +262,36 @@ class BackupManager @Inject constructor(
                 apiKey = providerRepository.credentials(entity.id)?.apiKey
             )
         }
-        val providerById = providerRows.associateBy { it.id }
-
+        // 明文预算：整个备份要一次性变成 String → ByteArray → 密文多份拷贝，
+        // 没有闸门在手机上就是 OOM。超限直接拒绝并说清怎么办，不做半份备份。
+        var budget = MAX_PLAIN_CHARS
         val conversations = db.chatDao().observeConversations().first().map { conv ->
-            // 提供商按本机 id 关联；这一行对应的提供商已被删除时，用占位身份记录，
-            // 恢复时会因为挂靠不上而被明确计入"未能恢复"，而不是静默塞给某个默认值。
-            val row: ProviderEntity? = providerById[conv.providerId]
+            val rows = db.chatDao().getMessages(conv.id)
+            val cost = rows.sumOf { row ->
+                row.content.length + (row.imagesJson?.length ?: 0) +
+                    (row.toolCallsJson?.length ?: 0) + (row.versionsJson?.length ?: 0)
+            } + conv.title.length + conv.systemPrompt.length
+            budget -= cost
+            if (budget < 0) {
+                throw IllegalStateException(
+                    "备份内容超过约 ${MAX_PLAIN_CHARS / (1024 * 1024)} MB（多为图片 base64 所致），" +
+                        "已中止。请先删除部分含图片的会话，或改用「导出会话」逐条保存。"
+                )
+            }
+
+            val rowEntity = db.providerDao().getById(conv.providerId)
             BackupConversation(
                 title = conv.title,
                 titleAuto = conv.titleAuto,
-                providerName = row?.name ?: ORPHANED_PROVIDER,
-                providerBaseUrl = row?.baseUrl ?: "",
+                providerName = rowEntity?.name ?: ORPHANED_PROVIDER,
+                providerBaseUrl = rowEntity?.baseUrl ?: "",
                 modelId = conv.modelId,
                 systemPrompt = conv.systemPrompt,
                 toolsEnabled = conv.toolsEnabled,
                 thinkingLevel = conv.thinkingLevel,
                 createdAt = conv.createdAt,
                 updatedAt = conv.updatedAt,
-                messages = db.chatDao().getMessages(conv.id).map { it.toBackup() }
+                messages = rows.map { it.toBackup() }
             )
         }
 
@@ -377,5 +389,8 @@ class BackupManager @Inject constructor(
     private companion object {
         const val EXTENSION = "sonorusbackup"
         const val ORPHANED_PROVIDER = "(已删除的提供商)"
+
+        /** 明文字符上限：约 100MB 字符，留出 String→ByteArray→密文的多份拷贝余量 */
+        const val MAX_PLAIN_CHARS = 100 * 1024 * 1024
     }
 }

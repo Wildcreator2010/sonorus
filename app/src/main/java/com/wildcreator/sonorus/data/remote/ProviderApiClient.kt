@@ -9,6 +9,8 @@ import com.wildcreator.sonorus.domain.model.ProviderCredentials
 import com.wildcreator.sonorus.domain.model.ProviderProtocol
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
@@ -69,6 +71,10 @@ class ProviderApiClient @Inject constructor(
         val protocolAdapter = adapter(credentials.protocol)
         val request = protocolAdapter.chatRequest(credentials.baseUrl, credentials.apiKey, chatRequest)
         val call = client.newCall(request)
+        // 取消挂在协程 job 结束上，不能只靠下面的 awaitClose：
+        // 生产者阻塞在 readLine()，awaitClose 要等整个流读完才注册得上，
+        // 于是"停止"只是界面不再显示 token，上游仍在继续生成并计费。
+        currentCoroutineContext().job.invokeOnCompletion { call.cancel() }
         val startedAt = System.currentTimeMillis()
         // 只在首次产生实质错误时记录，避免同一请求重复计数
         var recorded = false
