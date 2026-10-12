@@ -54,6 +54,14 @@ RELEASE_KEY_PASSWORD=...
 
 `gradle/wrapper` 里的 `distributionUrl` 指向腾讯镜像；官方源在你的网络环境下不通时，可自行改回 `services.gradle.org`。
 
+发布之后跑一次校对：
+
+```
+node tools/verify-release.mjs
+```
+
+它会用匿名接口检查 Release 的 tag 是否指向 `main`、是否已正式发布、资源里的 APK 与你本机产物的 sha256 是否**逐字节相同**、正文里的 `sha256=` 能否被客户端的正则抓到。任何一项不符就非零退出 —— 这个脚本可以接进发布流程当卡关。
+
 ## 目录分层
 
 ```
