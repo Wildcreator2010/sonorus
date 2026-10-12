@@ -66,7 +66,17 @@ di/       Hilt 装配
 
 ## 版本要求
 
-Android 8.0（minSdk 26）及以上。当前 `0.1.0`。
+Android 8.0（minSdk 26）及以上。当前 `0.1.1`。
+
+## 发布新版本
+
+应用内更新直接读 `api.github.com/repos/Wildcreator2010/Sonorus/releases/latest`，所以一个可用的 Release 必须同时满足三条：
+
+1. tag 形如 `v0.1.1`（去掉 `v` 前缀后与本机版本做逐段数字比较，必须严格更新才会提示）；
+2. 附带 `.apk` 资源（`content_type` 为 apk，或文件名以 `.apk` 结尾）；
+3. **正文里写明校验值**，格式 `sha256=<64 位十六进制>`（`SHA-256:` / 反引号 / markdown 列表符号都认）。
+
+缺第 3 条时客户端一律拒绝安装，不会退化成"不校验也装"——被中间人替换的包不能有机会。下载地址只接受 https 且落在 GitHub 白名单主机内。
 
 ## 说明
 
