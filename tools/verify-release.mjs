@@ -9,7 +9,7 @@
  * 断言项（任何一条不过就非零退出，供发布流程卡关）：
  *   1. releases/latest 匿名可读，且不是草稿/预发布
  *   2. tag 去前缀后的版本号与 APK 内 versionName 一致
- *   3. tag 指向的 commit 就是远端 main
+ *   3. tag 指向的 commit 落在 main 的历史里（不要求等于 main 的头，否则发布后再提交就误报）
  *   4. 存在 apk 资源，下载地址落在 ReleaseParser 的 https 主机白名单内
  *   5. 正文里的 sha256 能被 ReleaseParser 的同一条正则抓到
  *   6. 实际下载回来的字节与本地 APK 的 sha256 逐字节相同（证明上传没被截断或替换）
@@ -121,7 +121,19 @@ async function main() {
       tagSha = JSON.parse(inner.body.toString()).object.sha;
     }
   }
-  check('tag 指向远端 main', tagSha !== '' && tagSha === mainSha, `tag=${tagSha.slice(0, 7)} / main=${mainSha.slice(0, 7)}`);
+
+  // 断言"tag 落在 main 的历史里"，而不是"tag == main 的头"：
+  // 后者会在发布后的任何一次提交（改文档、加工具）之后误报失败。
+  let ancestry = 'unknown';
+  if (tagSha && mainSha) {
+    const cmp = await get(`https://api.github.com/repos/${OWNER}/${REPO}/compare/${tagSha}...${mainSha}`);
+    ancestry = cmp.status === 200 ? JSON.parse(cmp.body.toString()).status : `HTTP ${cmp.status}`;
+  }
+  check(
+    'tag 落在 main 的历史里',
+    ancestry === 'ahead' || ancestry === 'identical',
+    `compare(tag...main)=${ancestry}，tag=${tagSha.slice(0, 7)} / main=${mainSha.slice(0, 7)}`
+  );
 
   const assets = Array.isArray(release.assets) ? release.assets : [];
   const apk = assets.find(
