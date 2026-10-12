@@ -72,6 +72,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -394,6 +395,10 @@ fun ChatScreen(
     }
     val clipboard = LocalClipboardManager.current
 
+    // 批注/重新生成的门控在屏幕层算一次再传下去：items 的 lambda 里只要读 agentState，
+    // 等于每条气泡都订阅了流式状态，每个 chunk 都会把整个列表重组一遍。
+    val canReviseNow = !agentState.running && !runningElsewhere
+
     // Photo Picker：无需存储权限，返回 Uri
     val pickImages = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(MAX_IMAGE_COUNT)
@@ -590,7 +595,7 @@ fun ChatScreen(
                     MessageBubble(
                         message = message,
                         // 重新生成 / 批注修改只作用于最后一条回答（与后端能力一致）
-                        canRevise = !agentState.running && !runningElsewhere &&
+                        canRevise = canReviseNow &&
                             message.role == ChatRole.ASSISTANT &&
                             message.content.isNotBlank() &&
                             message.id == lastAnswerId,
@@ -665,19 +670,16 @@ fun ChatScreen(
                 ) {
                     pendingImages.forEach { attachment ->
                         Box {
-                            attachment.toImageBitmap(context)?.let { bitmap ->
-                                Image(
-                                    bitmap = bitmap,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(64.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceVariant,
-                                            RoundedCornerShape(8.dp)
-                                        )
-                                )
-                            }
+                            AttachmentImage(
+                                attachment = attachment,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceVariant,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                            )
                             IconButton(
                                 onClick = { pendingImages = pendingImages - attachment },
                                 modifier = Modifier.size(24.dp).align(Alignment.TopEnd)
@@ -992,16 +994,16 @@ private fun MessageBubble(
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         message.images.forEach { attachment ->
-                            attachment.toImageBitmap(LocalContext.current)?.let { bitmap ->
-                                Image(
-                                    bitmap = bitmap,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Fit,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(180.dp)
-                                )
-                            }
+                            AttachmentImage(
+                                attachment = attachment,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceVariant,
+                                        MaterialTheme.shapes.small
+                                    )
+                            )
                         }
                         if (message.content.isNotBlank()) {
                             Text(message.content)
@@ -1430,8 +1432,37 @@ private fun scaleDown(
 }
 
 /** base64 -> ImageBitmap；解码失败返回 null（UI 静默跳过，不让坏数据崩界面） */
-private fun ImageAttachment.toImageBitmap(context: android.content.Context): ImageBitmap? =
+private fun ImageAttachment.decodeToImageBitmap(): ImageBitmap? =
     runCatching {
         val bytes = Base64.decode(base64, Base64.DEFAULT)
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
     }.getOrNull()
+
+/**
+ * 附件缩略图。
+ *
+ * 解码放在 produceState + IO 里：原来它直接在组合期调用，一张 1024px 的图要占住主线程，
+ * 而"待发送预览"那一行跟着屏幕每个流式 chunk 重新组合，等于边生成边反复重解同一张图。
+ * key 用 attachment（data class，按 base64 内容比较），同一张图只解一次。
+ */
+@Composable
+private fun AttachmentImage(
+    attachment: ImageAttachment,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Fit
+) {
+    val bitmap = produceState<ImageBitmap?>(initialValue = null, attachment) {
+        value = withContext(Dispatchers.IO) { attachment.decodeToImageBitmap() }
+    }.value
+
+    Box(modifier = modifier) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap,
+                contentDescription = null,
+                contentScale = contentScale,
+                modifier = Modifier.matchParentSize()
+            )
+        }
+    }
+}
