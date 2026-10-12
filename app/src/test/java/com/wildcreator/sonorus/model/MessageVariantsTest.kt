@@ -37,11 +37,25 @@ class MessageVariantsTest {
     }
 
     @Test
-    fun 空正文版本被丢弃后仍保留兜底() {
-        val json = """[{"content":""},{"content":"有效"}]"""
+    fun 空正文版本必须保留原位() {
+        // 旧断言要求这里塌成 1 条 —— 那正是 bug 的根源：库里存的 activeVersion
+        // 是按写入时的位置记的，解码时删掉任何一版都会让后面所有版本前移，
+        // 于是 content 指向 A 版、推理与批注却来自 B 版。空正文本身合法。
+        val json = """[{"content":"","reasoning":"先想了想"},{"content":"有效"}]"""
         val list = MessageVariants.decode(json, fallback = version("兜底"))
+
+        assertEquals(2, list.size)
+        assertEquals("", list[0].content)
+        assertEquals("先想了想", list[0].reasoning)
+        assertEquals("有效", list[1].content)
+    }
+
+    @Test
+    fun 全部版本缺失时才用兜底() {
+        val list = MessageVariants.decode("[]", fallback = version("兜底"))
+
         assertEquals(1, list.size)
-        assertEquals("有效", list.first().content)
+        assertEquals("兜底", list.first().content)
     }
 
     @Test

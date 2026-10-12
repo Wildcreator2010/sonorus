@@ -136,16 +136,19 @@ internal fun Conversation.toEntity() = ConversationEntity(
 
 internal fun MessageEntity.toDomain(): ChatMessage {
     val list = MessageVariants.decode(versionsJson, AnswerVersion(content = content, createdAt = createdAt))
+    // 旧行 activeVersion = 0；越界一律钳到有效区间，不让一条脏数据毁掉整屏渲染
+    val active = activeVersion.coerceIn(0, list.lastIndex)
     return ChatMessage(
         id = id,
         conversationId = conversationId,
         role = runCatching { ChatRole.valueOf(role.uppercase()) }.getOrDefault(ChatRole.ASSISTANT),
-        content = content,
+        // content 恒等于生效版本的正文；两者不一致的脏行以"非空的那个"为准 ——
+        // 正常写入下它们必然相同（entry 是唯一构造点），只有历史损坏行才会分叉
+        content = list.getOrNull(active)?.content?.takeIf { it.isNotBlank() } ?: content,
         toolName = toolName,
         images = imagesJson.decodeImages(),
         versions = list,
-        // 旧行 activeVersion = 0；越界一律钳到有效区间，不让一条脏数据毁掉整屏渲染
-        activeVersion = activeVersion.coerceIn(0, list.lastIndex)
+        activeVersion = active
     )
 }
 

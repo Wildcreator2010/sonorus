@@ -24,12 +24,19 @@ object MessageVariants {
         explicitNulls = false
     }
 
-    /** 解码存下来的版本列表；为空或非法时用 fallback 兜底成单版本 */
+    /**
+     * 解码存下来的版本列表；为空或非法时用 fallback 兜底成单版本。
+     *
+     * **绝不能在这里过滤空正文版本**：库里存的 `activeVersion` 是按写入时的位置来的，
+     * 解码时删掉任何一版都会让后面所有版本前移，于是 `content` 与 `versions[activeVersion]`
+     * 指向不同的版本 —— 界面显示 A 版的正文、却带上 B 版的推理和批注。
+     * 空正文本身是合法的（模型只出推理、或只发起工具调用）。
+     */
     fun decode(json: String?, fallback: AnswerVersion): List<AnswerVersion> {
         if (json.isNullOrBlank()) return listOf(fallback)
         val list = runCatching {
             codec.decodeFromString(ListSerializer(AnswerVersion.serializer()), json)
-        }.getOrNull()?.filter { it.content.isNotBlank() }
+        }.getOrNull()
         return if (list.isNullOrEmpty()) listOf(fallback) else list
     }
 

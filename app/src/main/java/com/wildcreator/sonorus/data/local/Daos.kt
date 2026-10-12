@@ -42,7 +42,7 @@ interface ModelDao {
 
 @Dao
 interface ChatDao {
-    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC, id DESC")
     fun observeConversations(): Flow<List<ConversationEntity>>
 
     /**
@@ -60,7 +60,7 @@ interface ChatDao {
             "LEFT JOIN messages m ON m.conversationId = c.id " +
             "WHERE c.title LIKE :pattern ESCAPE '\\' " +
             "   OR m.content LIKE :pattern ESCAPE '\\' " +
-            "ORDER BY c.updatedAt DESC"
+            "ORDER BY c.updatedAt DESC, c.id DESC"
     )
     fun searchConversations(pattern: String): Flow<List<ConversationEntity>>
 
@@ -73,13 +73,29 @@ interface ChatDao {
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteConversation(id: Long)
 
+    /** 某提供商名下的会话数：删除提供商前用它向用户说清会连带丢多少 */
+    @Query("SELECT COUNT(*) FROM conversations WHERE providerId = :providerId")
+    suspend fun countConversationsForProvider(providerId: Long): Int
+
+    @Query("DELETE FROM messages WHERE conversationId IN " +
+        "(SELECT id FROM conversations WHERE providerId = :providerId)")
+    suspend fun deleteMessagesOfProvider(providerId: Long)
+
+    @Query("DELETE FROM conversations WHERE providerId = :providerId")
+    suspend fun deleteConversationsOfProvider(providerId: Long)
+
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteMessagesFor(conversationId: Long)
 
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, id ASC")
+    /**
+     * 消息一律按 id 排序：id 是自增的写入顺序，而 `deleteMessagesFrom` / `deleteMessagesAfter`
+     * 也按 id 删。若这里改成按 createdAt 排，一旦时钟回拨（或备份恢复带回旧时间戳），
+     * "编辑重发"和"重新生成"就会删错行 —— 排序键和删除键必须是同一把尺子。
+     */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
     fun observeMessages(conversationId: Long): Flow<List<MessageEntity>>
 
-    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt ASC, id ASC")
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
     suspend fun getMessages(conversationId: Long): List<MessageEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
