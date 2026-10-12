@@ -29,7 +29,13 @@ data class ModelEntity(
     val fetchedAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "conversations")
+/**
+ * 会话。
+ * `title` 上的索引是 MIGRATION_3_4 / MIGRATION_5_6 建的那个 —— **必须在这里声明**。
+ * Room 校验升级结果时比较的是完整 TableInfo（含索引集），实体没声明而迁移建了索引，
+ * 升级用户会直接抛 `Migration didn't properly handle: conversations`，整库打不开。
+ */
+@Entity(tableName = "conversations", indices = [Index("title")])
 data class ConversationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,

@@ -7,6 +7,7 @@ import com.wildcreator.sonorus.data.local.AppDatabase.Companion.MIGRATION_1_2
 import com.wildcreator.sonorus.data.local.AppDatabase.Companion.MIGRATION_2_3
 import com.wildcreator.sonorus.data.local.AppDatabase.Companion.MIGRATION_3_4
 import com.wildcreator.sonorus.data.local.AppDatabase.Companion.MIGRATION_4_5
+import com.wildcreator.sonorus.data.local.AppDatabase.Companion.MIGRATION_5_6
 import com.wildcreator.sonorus.data.prefs.SettingsManager
 import com.wildcreator.sonorus.data.remote.protocol.AnthropicAdapter
 import com.wildcreator.sonorus.data.remote.protocol.GeminiAdapter
@@ -97,7 +98,7 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, "sonorus.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .build()
 
     @Provides

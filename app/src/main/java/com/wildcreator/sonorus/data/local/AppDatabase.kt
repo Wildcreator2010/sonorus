@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MessageEntity::class,
         RequestStatEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -56,12 +56,8 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
-                db.execSQL(
-                    "CREATE INDEX IF NOT EXISTS `index_request_stats_createdAt` ON `request_stats` (`createdAt`)"
-                )
-                db.execSQL(
-                    "CREATE INDEX IF NOT EXISTS `index_request_stats_providerId` ON `request_stats` (`providerId`)"
-                )
+                db.execSQL(CREATE_INDEX_REQUEST_STATS_CREATED_AT)
+                db.execSQL(CREATE_INDEX_REQUEST_STATS_PROVIDER_ID)
                 // 既有会话 thinkingLevel 保持 NULL，即跟随设置页全局默认
                 db.execSQL("ALTER TABLE conversations ADD COLUMN thinkingLevel TEXT")
             }
@@ -76,9 +72,7 @@ abstract class AppDatabase : RoomDatabase() {
          */
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    "CREATE INDEX IF NOT EXISTS `index_conversations_title` ON `conversations` (`title`)"
-                )
+                db.execSQL(CREATE_INDEX_CONVERSATIONS_TITLE)
             }
         }
 
@@ -96,5 +90,36 @@ abstract class AppDatabase : RoomDatabase() {
                 )
             }
         }
+
+        /**
+         * v5 -> v6：把 conversations 的标题索引"补认"进 schema。
+         *
+         * MIGRATION_3_4 建了这个索引，但实体一直没声明 `indices`，于是 Room 校验升级结果时
+         * 期望索引集为空、实读到一个 —— 抛 `Migration didn't properly handle: conversations`，
+         * 升级用户整库打不开（全新安装不跑迁移，所以从没暴露）。
+         *
+         * 现在实体声明了 Index("title")，两边对齐。这条迁移本身对"曾经跑过 3→4"的库是幂等的
+         * （IF NOT EXISTS）；对全新安装升上来的库则真正把索引建起来。
+         * 不能只改实体不加迁移：那样新装 v5 的库升到 v6 会缺索引，反向同样校验失败。
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(CREATE_INDEX_CONVERSATIONS_TITLE)
+            }
+        }
+
+        /**
+         * 索引 SQL 只留一份：迁移与 SchemaIndexConsistencyTest 都引用它，
+         * 名字一旦和 Room 的 `index_<表>_<列>` 约定漂移，测试会当场失败。
+         */
+        const val CREATE_INDEX_CONVERSATIONS_TITLE =
+            "CREATE INDEX IF NOT EXISTS `index_conversations_title` ON `conversations` (`title`)"
+
+        /** v2→v3 建的两个统计索引，同样只留一份文本给一致性测试引用 */
+        const val CREATE_INDEX_REQUEST_STATS_CREATED_AT =
+            "CREATE INDEX IF NOT EXISTS `index_request_stats_createdAt` ON `request_stats` (`createdAt`)"
+
+        const val CREATE_INDEX_REQUEST_STATS_PROVIDER_ID =
+            "CREATE INDEX IF NOT EXISTS `index_request_stats_providerId` ON `request_stats` (`providerId`)"
     }
 }
