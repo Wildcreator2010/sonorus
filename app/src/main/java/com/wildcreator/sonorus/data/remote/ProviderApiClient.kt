@@ -78,6 +78,8 @@ class ProviderApiClient @Inject constructor(
         val startedAt = System.currentTimeMillis()
         // 只在首次产生实质错误时记录，避免同一请求重复计数
         var recorded = false
+        // 各家协议都在最后一个增量上带 finish；没带就是上游半路结束
+        var sawFinish = false
 
         try {
             call.execute().use { response ->
@@ -107,13 +109,24 @@ class ProviderApiClient @Inject constructor(
                                         record(credentials, chatRequest.model, false, safeErr, startedAt)
                                         recorded = true
                                     }
-                                } ?: trySend(StreamEvent.Delta(delta))
+                                } ?: run {
+                                    if (delta.finish != null) sawFinish = true
+                                    trySend(StreamEvent.Delta(delta))
+                                }
                             }
                         }
                     }
                 }
                 if (!recorded) {
-                    record(credentials, chatRequest.model, success = true, error = null, startedAt = startedAt)
+                    // 没收到 finish 就记失败：上游超时/网关掐断时 chunked body 也能"干净地"结束，
+                    // 这种截断在 HTTP 层完全看不出来，不认就永远统计成功。
+                    // 界面侧仍按已有内容展示（不为不合规网关新增报错），只有统计变严格。
+                    record(
+                        credentials, chatRequest.model,
+                        success = sawFinish,
+                        error = if (sawFinish) null else "流未以 finish 结束（疑似被截断）",
+                        startedAt = startedAt
+                    )
                     recorded = true
                 }
                 trySend(StreamEvent.Done)

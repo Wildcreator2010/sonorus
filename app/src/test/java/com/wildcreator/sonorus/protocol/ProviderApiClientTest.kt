@@ -258,6 +258,57 @@ class ProviderApiClientTest {
         assertEquals("统计写库失败不能拖垮模型拉取", 1, models.size)
     }
 
+    @Test
+    fun 带finish的流式请求记为成功样本() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    """
+                    data: {"choices":[{"delta":{"content":"你好"},"finish_reason":"stop"}]}
+
+                    data: [DONE]
+
+                    """.trimIndent()
+                )
+        )
+
+        client.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).toList()
+
+        val stat = statDao.inserted.single()
+        assertTrue("正常收尾的流必须记成功", stat.success)
+        assertEquals(null, stat.errorKind)
+    }
+
+    @Test
+    fun 没收到finish的流记为失败并写明截断() = runBlocking {
+        // 上游半路结束（网关超时、进程被杀）时，chunked body 也能"干净地"读完：
+        // HTTP 层完全看不出问题，只有 finish 缺失能识别，这类样本不能算成功
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody(
+                    """
+                    data: {"choices":[{"delta":{"content":"写到一半"}}]}
+
+                    data: [DONE]
+
+                    """.trimIndent()
+                )
+        )
+
+        val events = withTimeout(10_000) {
+            client.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).toList()
+        }
+        assertTrue("界面侧行为不变，仍收到 Done", events.last() is ProviderApiClient.StreamEvent.Done)
+
+        val stat = statDao.inserted.single()
+        assertTrue("没有 finish 的流要记为失败", !stat.success)
+        assertTrue("失败原因要写明疑似截断", stat.errorKind!!.contains("截断"))
+    }
+
     private fun credentials(protocol: ProviderProtocol, path: String) = ProviderCredentials(
         providerId = 1L,
         protocol = protocol,
