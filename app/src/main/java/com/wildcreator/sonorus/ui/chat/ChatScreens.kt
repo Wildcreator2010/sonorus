@@ -88,6 +88,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.wildcreator.sonorus.R
@@ -101,6 +102,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /** 单条消息最多附带的图片数（上游普遍有此限制） */
 private const val MAX_IMAGE_COUNT = 4
@@ -529,16 +531,11 @@ fun ChatScreen(
                                             scope.launch { snackbar.showSnackbar("会话不存在，无法分享") }
                                             return@exportConversation
                                         }
-                                        val send = Intent(Intent.ACTION_SEND).apply {
-                                            type = "text/plain"
-                                            putExtra(Intent.EXTRA_SUBJECT, bundle.fileName)
-                                            putExtra(Intent.EXTRA_TITLE, bundle.fileName)
-                                            putExtra(Intent.EXTRA_TEXT, bundle.text)
-                                        }
-                                        runCatching {
-                                            context.startActivity(Intent.createChooser(send, "分享会话"))
-                                        }.onFailure {
-                                            scope.launch { snackbar.showSnackbar("没有可处理分享的应用") }
+                                        scope.launch {
+                                            val ok = context.shareExportFile(bundle)
+                                            if (!ok) {
+                                                snackbar.showSnackbar("分享失败，请改用「导出到文件」")
+                                            }
                                         }
                                     }
                                 }
@@ -1335,6 +1332,43 @@ private fun AnnotateDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+// ---------- 分享 ----------
+
+/** FileProvider 暴露的 cache 子目录名，必须与 res/xml/file_paths.xml 里的 cache-path 一致 */
+private const val SHARE_DIR_NAME = "share"
+
+/**
+ * 把会话写成 cache/share 下的临时文件，再用 FileProvider 的 content:// uri 分享出去。
+ *
+ * 不用 Intent.EXTRA_TEXT 传正文：Intent 走 Binder，事务缓冲上限约 1MB，长会话会抛
+ * TransactionTooLargeException —— 且它发生在 startActivity 返回之后、对方进程接收之时，
+ * runCatching 抓不到，症状只剩"点了分享没反应"。EXTRA_STREAM 里只装一个 uri，与会话长度无关。
+ */
+private suspend fun android.content.Context.shareExportFile(bundle: ExportBundle): Boolean {
+    val uri = withContext(Dispatchers.IO) {
+        runCatching {
+            val dir = File(cacheDir, SHARE_DIR_NAME).apply { mkdirs() }
+            // 每次只留当前这一份，系统清理 cache 只是兜底
+            dir.listFiles()?.forEach { it.delete() }
+            val file = File(dir, bundle.fullName).apply { writeText(bundle.text) }
+            FileProvider.getUriForFile(this@shareExportFile, "$packageName.fileprovider", file)
+        }.getOrNull()
+    } ?: return false
+
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = bundle.mimeType
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, bundle.fileName)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    return runCatching {
+        startActivity(
+            Intent.createChooser(send, "分享会话")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        )
+    }.isSuccess
 }
 
 // ---------- 图片辅助 ----------

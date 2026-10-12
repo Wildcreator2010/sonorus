@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  FileProvider 共享路径：只暴露下载 APK 用的私有 cache 子目录。
-  收窄到这一个目录，避免把整个 cache / files 变成 content:// 可读。
+  FileProvider 共享路径：只暴露两个私有 cache 子目录，且都是"写完只读一次"的临时产物。
+  收窄到这两个目录，避免把整个 cache / files 变成 content:// 可读。
+  新增写 cache 子目录并走 FileProvider 时，必须同步在这里登记，否则 getUriForFile 直接抛异常。
 -->
 <paths>
+    <!-- 应用内更新下载的 APK -->
     <cache-path name="apk" path="apk/" />
+    <!-- 长会话分享导出的 Markdown / JSON -->
+    <cache-path name="share" path="share/" />
 </paths>

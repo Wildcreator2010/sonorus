@@ -17,8 +17,9 @@
       2) 备份/迁移规则排除加密密钥库（Keystore 主密钥不可导出，跨设备恢复必失败），
          明文聊天库不参与云备份（见 data_extraction_rules.xml）；
       3) 明文开关不写死在 Manifest，避免 release 被覆盖；
-      4) 下载的 APK 只落在 cache/apk（FileProvider 以 content:// 授权单次可读），
-         不写外部存储，避免其他应用读到待安装包。
+      4) 下载的 APK 只落在 cache/apk、分享用的会话导出只落在 cache/share，
+         两者都经 FileProvider 以 content:// 授权单次可读，不写外部存储，
+         避免其他应用读到待安装包或会话内容。
     -->
     <application
         android:name=".SonorusApp"
