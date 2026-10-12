@@ -1,6 +1,7 @@
 package com.wildcreator.sonorus.data.remote.protocol
 
 import com.wildcreator.sonorus.domain.agent.ThinkingLevel
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -13,6 +14,13 @@ import java.net.URI
 internal fun JsonElement?.asText(): String? = (this as? JsonPrimitive)?.contentOrNull
 
 internal fun JsonElement?.asObject(): JsonObject? = this as? JsonObject
+
+/**
+ * 数组取值一律走这里，不要用 `element.jsonArray`：
+ * 后者遇到 `"delta": null` / `"error": null`（网关末帧常见）会抛 IllegalArgumentException，
+ * 把整条已经正常流出的回答连累成"网络错误"。JsonNull 在这里安静地返回 null。
+ */
+internal fun JsonElement?.asArray(): JsonArray? = this as? JsonArray
 
 internal fun JsonElement?.asInt(fallback: Int = 0): Int =
     (this as? JsonPrimitive)?.intOrNull ?: fallback
@@ -27,6 +35,8 @@ internal fun JsonElement?.asTextOrNull(): String? =
 internal fun JsonObject.text(key: String): String? = this[key].asText()
 
 internal fun JsonObject.obj(key: String): JsonObject? = this[key].asObject()
+
+internal fun JsonObject.arr(key: String): JsonArray? = this[key].asArray()
 
 internal fun JsonElement.asPrimitiveText(): String? = jsonPrimitive.contentOrNull
 

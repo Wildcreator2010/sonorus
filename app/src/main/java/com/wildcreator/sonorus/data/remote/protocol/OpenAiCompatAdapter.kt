@@ -101,32 +101,40 @@ class OpenAiCompatAdapter @Inject constructor(
         if (data == "[DONE]") return null
         val root = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: return null
 
-        root["error"]?.let {
-            return StreamDelta(error = it.jsonObject["message"]?.jsonPrimitive?.content ?: "上游返回错误")
+        // 全部走安全取值：网关末帧常见 "error": null / "delta": null，
+        // 用 jsonObject/jsonArray 会抛异常把整条已流出的回答连累成"网络错误"
+        root.obj("error")?.let {
+            return StreamDelta(error = it.text("message") ?: "上游返回错误")
         }
 
-        val choice = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject ?: return null
-        val delta = choice["delta"]?.jsonObject
-        val text = delta?.get("content")?.asText()
+        val choice = root.arr("choices")?.firstOrNull().asObject() ?: return null
+        val delta = choice.obj("delta")
+        val text = delta?.get("content").asText()
         // 推理增量：DeepSeek / 通义 / Qwen 等用 reasoning_content，部分网关（xAI、OpenRouter）用 reasoning
-        val reasoning = (delta?.get("reasoning_content")?.asText() ?: delta?.get("reasoning")?.asText())
+        val reasoning = (delta?.get("reasoning_content").asText() ?: delta?.get("reasoning").asText())
             ?.takeIf { it.isNotEmpty() }
 
-        val toolCalls = delta?.get("tool_calls")?.jsonArray?.mapNotNull { element ->
-            val obj = element.jsonObject
-            val fn = obj["function"]?.jsonObject
+        val toolCalls = delta?.arr("tool_calls")?.mapNotNull { element ->
+            val obj = element.asObject() ?: return@mapNotNull null
+            val fn = obj.obj("function")
             val hasAny = obj["id"] != null || fn != null
             if (!hasAny) return@mapNotNull null
             ToolCallDelta(
                 index = obj["index"].asInt(),
-                id = obj["id"]?.asText(),
-                nameChunk = fn?.get("name")?.asText(),
-                argsChunk = fn?.get("arguments")?.asText()
+                id = obj["id"].asText(),
+                nameChunk = fn?.get("name").asText(),
+                argsChunk = fn?.get("arguments").asText()
             )
         }?.takeIf { it.isNotEmpty() }
 
-        val finish = choice["finish_reason"]?.asText()?.let { reason ->
-            if (reason == "tool_calls") FinishReason.TOOL_CALLS else FinishReason.STOP
+        val finish = choice["finish_reason"].asText()?.let { reason ->
+            when (reason) {
+                "tool_calls", "function_call" -> FinishReason.TOOL_CALLS
+                // 被长度上限截断：内容不完整，不能当正常收尾
+                "length" -> FinishReason.LENGTH
+                "content_filter" -> FinishReason.BLOCKED
+                else -> FinishReason.STOP
+            }
         }
 
         return if (text == null && reasoning == null && toolCalls == null && finish == null) null

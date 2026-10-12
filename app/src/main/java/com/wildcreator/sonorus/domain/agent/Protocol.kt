@@ -66,7 +66,11 @@ data class UnifiedChatRequest(
     val thinkingLevel: ThinkingLevel = ThinkingLevel.OFF
 )
 
-enum class FinishReason { STOP, TOOL_CALLS }
+/**
+ * 上游本轮的收尾原因。
+ * LENGTH / BLOCKED 意味着"这段文本不是完整答案"，调用方绝不能当正常回答落库。
+ */
+enum class FinishReason { STOP, TOOL_CALLS, LENGTH, BLOCKED }
 
 /**
  * 工具调用增量。

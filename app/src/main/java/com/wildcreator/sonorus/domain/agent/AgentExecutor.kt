@@ -203,7 +203,12 @@ class AgentExecutor @Inject constructor(
         val contentSb = StringBuilder()
         val reasoningSb = StringBuilder()
         try {
-            val conversation = chatDao.getConversation(conversationId) ?: return@withContext
+            // 会话可能已被删除（自动清理或列表页手动删）。这里必须显式报错：
+            // 用户消息已经先落库，静默返回会让界面表现为"点了发送但毫无反应"。
+            val conversation = chatDao.getConversation(conversationId) ?: run {
+                _state.value = AgentState(conversationId = conversationId, error = "会话已不存在，请重新发起")
+                return@withContext
+            }
             val credentials = providerRepository.credentials(conversation.providerId) ?: run {
                 _state.value = AgentState(conversationId = conversationId, error = "缺少 API Key 或提供商不存在")
                 return@withContext
@@ -270,6 +275,8 @@ class AgentExecutor @Inject constructor(
 
                 contentSb.setLength(0)
                 reasoningSb.setLength(0)
+                // 每轮单独记收尾原因：工具调用轮会以 tool_calls 收尾，不能污染最终轮的判定
+                var iterationFinish: FinishReason? = null
                 val toolCalls = sortedMapOf<Int, ToolCallBuilder>()
                 var streamError: String? = null
 
@@ -277,6 +284,7 @@ class AgentExecutor @Inject constructor(
                     when (event) {
                         is ProviderApiClient.StreamEvent.Delta -> {
                             val delta = event.delta
+                            delta.finish?.let { iterationFinish = it }
                             delta.reasoning?.let { piece ->
                                 reasoningSb.append(piece)
                                 _state.value = _state.value.copy(
@@ -361,7 +369,21 @@ class AgentExecutor @Inject constructor(
                     return@withContext
                 }
                 persistAnswer(conversationId, retired, note, finalText, reasoningSb.toString())
-                _state.value = AgentState(conversationId = conversationId)
+
+                // 上游以 LENGTH / BLOCKED 收尾时，这段文本并不完整。
+                // 已生成的部分照旧落库（不丢用户已经拿到的内容），但必须把"不完整"说出来 ——
+                // 静默存成完整答案是这批问题里最难被发现的一类，因为它看起来完全正常。
+                _state.value = when (iterationFinish) {
+                    FinishReason.LENGTH -> AgentState(
+                        conversationId = conversationId,
+                        error = "回答达到模型的长度上限被截断，已保存截断到的部分；可以再发一句「继续」"
+                    )
+                    FinishReason.BLOCKED -> AgentState(
+                        conversationId = conversationId,
+                        error = "回答被上游内容策略拦截，可能不完整"
+                    )
+                    else -> AgentState(conversationId = conversationId)
+                }
                 return@withContext
             }
             _state.value = AgentState(

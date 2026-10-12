@@ -226,7 +226,42 @@ class AnthropicAdapter @Inject constructor(
                 }
             }
         }
-        return result
+        // 空 content 数组 Anthropic 会直接 400（模型只出推理不出正文时就会出现），先滤掉再合并
+        val nonEmpty = result.filter {
+            (it["content"] as? kotlinx.serialization.json.JsonArray)?.isNotEmpty() == true
+        }
+        return mergeAdjacentRoles(nonEmpty)
+    }
+
+    /**
+     * Anthropic 强制 user / assistant 交替出现。
+     *
+     * 一次请求失败后库里会留下没有配对的用户消息（用户消息总是先落库），下一次发送就是
+     * 连续两条 user —— 上游直接 400，而那条坏行不修就永远发不出去，**整个会话永久卡死**。
+     * 这里把相邻同角色消息的 content 块合并成一条，让坏历史自愈。
+     */
+    private fun mergeAdjacentRoles(list: List<JsonObject>): List<JsonObject> {
+        if (list.size < 2) return list
+        val merged = mutableListOf<JsonObject>()
+
+        for (message in list) {
+            val previous = merged.lastOrNull()
+            val previousRole = previous?.get("role").asText()
+            val role = message["role"].asText()
+
+            if (previous != null && role != null && previousRole == role) {
+                val blocks = mutableListOf<kotlinx.serialization.json.JsonElement>()
+                (previous["content"] as? kotlinx.serialization.json.JsonArray)?.let { blocks.addAll(it) }
+                (message["content"] as? kotlinx.serialization.json.JsonArray)?.let { blocks.addAll(it) }
+                merged[merged.lastIndex] = buildJsonObject {
+                    put("role", role)
+                    putJsonArray("content") { blocks.forEach { add(it) } }
+                }
+            } else {
+                merged += message
+            }
+        }
+        return merged
     }
 
     private fun parseInput(arguments: String): JsonElement =
