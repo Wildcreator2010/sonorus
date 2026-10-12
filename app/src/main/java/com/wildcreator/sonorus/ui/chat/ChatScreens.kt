@@ -275,7 +275,7 @@ private fun EmptyConversations(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center
     ) {
         Image(
-            painter = painterResource(R.drawable.logo_wildcommunity),
+            painter = painterResource(R.drawable.logo_sonorus),
             contentDescription = null,
             modifier = Modifier.size(96.dp)
         )
