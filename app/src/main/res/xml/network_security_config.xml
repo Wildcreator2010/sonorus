@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- release 基线：禁止明文 http；所有自建端点必须使用 https -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

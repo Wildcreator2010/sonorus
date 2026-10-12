@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 共享路径：只暴露下载 APK 用的私有 cache 子目录。
+  收窄到这一个目录，避免把整个 cache / files 变成 content:// 可读。
+-->
+<paths>
+    <cache-path name="apk" path="apk/" />
+</paths>

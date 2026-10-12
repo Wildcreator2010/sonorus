@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      应用内更新用到的危险权限：调起系统安装页。
+      App 自身绝不静默安装 —— 只把"下载完并通过 sha256 校验"的 APK 交给系统确认。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
+      生产安全基线：
+      1) 明文流量由 network_security_config 控制（所有构建类型一律禁止，debug 未开放豁免）；
+      2) 备份/迁移规则排除加密密钥库（Keystore 主密钥不可导出，跨设备恢复必失败），
+         明文聊天库不参与云备份（见 data_extraction_rules.xml）；
+      3) 明文开关不写死在 Manifest，避免 release 被覆盖；
+      4) 下载的 APK 只落在 cache/apk（FileProvider 以 content:// 授权单次可读），
+         不写外部存储，避免其他应用读到待安装包。
+    -->
+    <application
+        android:name=".SonorusApp"
+        android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/Theme.Sonorus">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

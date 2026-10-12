@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅 debug 变体：允许明文 http，便于调试局域网 / 自建网关端点。release 不受影响。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

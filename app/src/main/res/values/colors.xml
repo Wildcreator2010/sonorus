@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 图标背景：logo 为深色描线，配白底在浅色与深色桌面上都保持清晰 -->
+    <color name="ic_launcher_background">#FFFFFF</color>
+</resources>

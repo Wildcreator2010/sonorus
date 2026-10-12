@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12 及以上：云备份与设备传输规则。
+  exclude 必须落在 include 范围内，否则 lint 报 FullBackupContent 错误。
+  安全决策：明文聊天库 sonorus.db 不参与云备份（不上 Google 云端）；
+  换机迁移走 device-transfer（用户主动发起、传输链路加密）或应用内导出。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="datastore/" />
+        <include domain="sharedpref" path="." />
+        <exclude domain="sharedpref" path="sonorus_secrets.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="database" path="sonorus.db" />
+        <include domain="file" path="datastore/" />
+        <include domain="sharedpref" path="." />
+        <exclude domain="sharedpref" path="sonorus_secrets.xml" />
+    </device-transfer>
+</data-extraction-rules>
