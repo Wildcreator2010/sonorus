@@ -30,8 +30,8 @@ android {
         applicationId = "com.wildcreator.sonorus"
         minSdk = 26 // Android 8.0
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = 6
+        versionName = "0.1.5"
     }
 
     signingConfigs {
