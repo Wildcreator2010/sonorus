@@ -101,6 +101,7 @@ class AnthropicAdapter @Inject constructor(
         val type = root["type"].asText() ?: event
 
         return when (type) {
+            "message_start" -> StreamDelta(inputTokens = root.obj("message")?.obj("usage")?.get("input_tokens").asIntOrNull())
             "content_block_start" -> {
                 val block = root.obj("content_block") ?: return null
                 if (block["type"].asText() != "tool_use") return null

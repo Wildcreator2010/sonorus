@@ -84,6 +84,8 @@ class OpenAiCompatAdapter @Inject constructor(
                 }
             }
             put("stream", true)
+            // Usage is emitted in the final SSE frame when requested.
+            putJsonObject("stream_options") { put("include_usage", true) }
             put("max_tokens", request.maxTokens)
             // 思考等级：OpenAI 系用 reasoning_effort；OFF 时不发该字段，
             // 避免不支持推理的模型/网关因未知参数报 400
@@ -107,7 +109,9 @@ class OpenAiCompatAdapter @Inject constructor(
             return StreamDelta(error = it.text("message") ?: "上游返回错误")
         }
 
-        val choice = root.arr("choices")?.firstOrNull().asObject() ?: return null
+        val inputTokens = root.obj("usage")?.get("prompt_tokens").asIntOrNull() ?: root.obj("usage")?.get("input_tokens").asIntOrNull()
+        val choice = root.arr("choices")?.firstOrNull().asObject()
+        if (choice == null) return inputTokens?.let { StreamDelta(inputTokens = it) }
         val delta = choice.obj("delta")
         val text = delta?.get("content").asText()
         // 推理增量：DeepSeek / 通义 / Qwen 等用 reasoning_content，部分网关（xAI、OpenRouter）用 reasoning
@@ -137,8 +141,8 @@ class OpenAiCompatAdapter @Inject constructor(
             }
         }
 
-        return if (text == null && reasoning == null && toolCalls == null && finish == null) null
-        else StreamDelta(text = text, reasoning = reasoning, toolCalls = toolCalls, finish = finish)
+        return if (text == null && reasoning == null && toolCalls == null && finish == null && inputTokens == null) null
+        else StreamDelta(text = text, reasoning = reasoning, toolCalls = toolCalls, finish = finish, inputTokens = inputTokens)
     }
 
     private fun UnifiedMessage.toWire(): JsonObject = buildJsonObject {

@@ -47,6 +47,8 @@ data class ConversationEntity(
     val toolsEnabled: Boolean = true,
     /** 思考等级覆盖；null = 跟随设置页的全局默认 */
     val thinkingLevel: String? = null,
+    val contextSummary: String? = null,
+    val summaryThroughMessageId: Long = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

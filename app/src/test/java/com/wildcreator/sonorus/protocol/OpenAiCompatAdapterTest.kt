@@ -199,7 +199,19 @@ class OpenAiCompatAdapterTest {
     }
 
     @Test
-    fun parseStream_空choice返回null() {
+    fun parseStream_usageOnlyFinalFrameRetainsInputTokenCount() {
+        val delta = adapter.parseStream(null, """{"choices":[],"usage":{"prompt_tokens":321}}""")!!
+        assertEquals(321, delta.inputTokens)
+    }
+
+    @Test
+    fun chatRequest_asksForStreamingUsage() {
+        val payload = adapter.chatRequest("https://api.openai.com/v1", "sk-test", baseRequest()).bodyJson()
+        assertEquals("true", payload["stream_options"]!!.jsonObject["include_usage"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun parseStream_空choice无usage返回null() {
         assertNull(adapter.parseStream(null, """{"choices":[]}"""))
     }
 

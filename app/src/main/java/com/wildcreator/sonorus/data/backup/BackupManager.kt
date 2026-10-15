@@ -289,6 +289,8 @@ class BackupManager @Inject constructor(
                 systemPrompt = conv.systemPrompt,
                 toolsEnabled = conv.toolsEnabled,
                 thinkingLevel = conv.thinkingLevel,
+                contextSummary = conv.contextSummary,
+                summaryThroughMessageId = conv.summaryThroughMessageId,
                 createdAt = conv.createdAt,
                 updatedAt = conv.updatedAt,
                 messages = rows.map { it.toBackup() }
@@ -356,6 +358,9 @@ class BackupManager @Inject constructor(
         systemPrompt = systemPrompt,
         toolsEnabled = toolsEnabled,
         thinkingLevel = thinkingLevel,
+        // Message ids are device-local; restore raw messages and rebuild the summary on this device.
+        contextSummary = null,
+        summaryThroughMessageId = 0,
         createdAt = createdAt,
         updatedAt = updatedAt
     )

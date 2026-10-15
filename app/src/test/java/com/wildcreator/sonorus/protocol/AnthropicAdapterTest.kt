@@ -209,6 +209,15 @@ class AnthropicAdapterTest {
     }
 
     @Test
+    fun parseStream_messageStartUsageProvidesInputTokens() {
+        val delta = adapter.parseStream(
+            "message_start",
+            """{"type":"message_start","message":{"usage":{"input_tokens":777}}}"""
+        )!!
+        assertEquals(777, delta.inputTokens)
+    }
+
+    @Test
     fun parseStream_未知事件返回null() {
         assertNull(adapter.parseStream("ping", """{"type":"ping"}"""))
     }

@@ -109,6 +109,9 @@ class AgentExecutor @Inject constructor(
     @Volatile
     private var currentJob: kotlinx.coroutines.Job? = null
 
+    @Volatile
+    private var tokenScale = 1.0
+
     /** 停止生成：取消当前请求，已流出的内容作为一版回答落库 */
     fun stop() {
         currentJob?.cancel()
@@ -234,6 +237,8 @@ class AgentExecutor @Inject constructor(
                 ?.let { name -> runCatching { ThinkingLevel.valueOf(name) }.getOrNull() }
                 ?: settings.thinkingLevel.first()
             val historyLimit = settings.contextLimit.first()
+            maybeCompressContext(conversation, credentials, thinking, anchorId)
+            val activeConversation = chatDao.getConversation(conversationId) ?: conversation
             _state.value = _state.value.copy(
                 contextLimit = historyLimit,
                 totalMessages = chatDao.countMessages(conversationId)
@@ -249,7 +254,7 @@ class AgentExecutor @Inject constructor(
                 iterations++
 
                 val toolsEnabled = conversation.toolsEnabled && credentials.protocol.supportsTools
-                val history = buildHistory(conversationId, historyLimit, upToId = anchorId)
+                val history = buildHistory(conversationId, historyLimit, upToId = anchorId, summaryThroughId = activeConversation.summaryThroughMessageId)
                     .let { base ->
                         when {
                             // 批注修订：把原回答与批注指令作为本轮的临时上下文，都不落库
@@ -263,11 +268,12 @@ class AgentExecutor @Inject constructor(
                     }
                 val request = UnifiedChatRequest(
                     model = conversation.modelId,
-                    systemPrompt = conversation.systemPrompt,
+                    systemPrompt = activeConversation.systemPrompt + activeConversation.contextSummary?.let { "\n\n[Earlier conversation summary]\n$it" }.orEmpty(),
                     messages = history,
                     tools = if (toolsEnabled) toolRegistry.specs() else null,
                     thinkingLevel = thinking
                 )
+                val estimatedRequestTokens = estimateTokens(activeConversation.systemPrompt) + history.sumOf { estimateTokens(it.text.orEmpty()) }
                 _state.value = _state.value.copy(
                     sentMessages = history.size,
                     totalMessages = chatDao.countMessages(conversationId)
@@ -284,6 +290,9 @@ class AgentExecutor @Inject constructor(
                     when (event) {
                         is ProviderApiClient.StreamEvent.Delta -> {
                             val delta = event.delta
+                            delta.inputTokens?.let { actual ->
+                                if (estimatedRequestTokens > 0) tokenScale = (actual.toDouble() / estimatedRequestTokens).coerceIn(0.5, 2.0)
+                            }
                             delta.finish?.let { iterationFinish = it }
                             delta.reasoning?.let { piece ->
                                 reasoningSb.append(piece)
@@ -444,7 +453,77 @@ class AgentExecutor @Inject constructor(
     }
 
     /**
-     * Room 消息历史 -> 协议无关的统一消息序列。
+     * When the conservative estimate approaches 900k tokens, summarize only
+     * messages before the current anchor. Original rows remain untouched.
+     */
+    private suspend fun maybeCompressContext(
+        conversation: com.wildcreator.sonorus.data.local.ConversationEntity,
+        credentials: com.wildcreator.sonorus.domain.model.ProviderCredentials,
+        thinking: ThinkingLevel,
+        anchorId: Long
+    ) {
+        val rows = chatDao.getMessages(conversation.id)
+        val eligible = rows.filter { it.id > conversation.summaryThroughMessageId && it.id < anchorId }
+        val priorSummary = conversation.contextSummary.orEmpty()
+        val estimate = ((estimateTokens(conversation.systemPrompt) + estimateTokens(priorSummary) +
+            eligible.sumOf { estimateTokens(it.content) + (it.imagesJson?.length ?: 0) / 4 }) * tokenScale).toInt()
+        if (estimate < COMPRESSION_TRIGGER_TOKENS || eligible.isEmpty()) return
+
+        var retainedTokens = 0
+        var firstRetainedIndex = eligible.size
+        for (index in eligible.indices.reversed()) {
+            val row = eligible[index]
+            val rowTokens = estimateTokens(row.content) + (row.imagesJson?.length ?: 0) / 4
+            if (retainedTokens + rowTokens > COMPRESSION_TARGET_TOKENS && firstRetainedIndex < eligible.size) break
+            retainedTokens += rowTokens
+            firstRetainedIndex = index
+        }
+        if (firstRetainedIndex == 0) return
+        val toSummarize = eligible.take(firstRetainedIndex)
+        val summaryMessages = buildHistory(
+            conversation.id, 0, upToId = toSummarize.last().id,
+            summaryThroughId = conversation.summaryThroughMessageId
+        )
+        if (summaryMessages.isEmpty()) return
+        val messagesToSummarize = if (priorSummary.isBlank()) summaryMessages else
+            listOf(UnifiedMessage(role = UnifiedRole.USER, text = "Existing summary:\n$priorSummary")) + summaryMessages
+        val summaryRequest = UnifiedChatRequest(
+            model = conversation.modelId,
+            systemPrompt = SUMMARY_SYSTEM_PROMPT,
+            messages = messagesToSummarize,
+            tools = null,
+            maxTokens = SUMMARY_MAX_TOKENS,
+            thinkingLevel = ThinkingLevel.OFF
+        )
+        val summary = StringBuilder()
+        var error: String? = null
+        try {
+            apiClient.streamChat(credentials, summaryRequest).collect { event ->
+                when (event) {
+                    is ProviderApiClient.StreamEvent.Delta -> event.delta.text?.let(summary::append)
+                    is ProviderApiClient.StreamEvent.Error -> error = event.message
+                    ProviderApiClient.StreamEvent.Done -> Unit
+                }
+            }
+        } catch (_: Exception) {
+            error = "summary request failed"
+        }
+        if (error == null && summary.isNotBlank()) {
+            chatDao.getConversation(conversation.id)?.let { current ->
+                chatDao.upsertConversation(
+                    current.copy(
+                        contextSummary = summary.toString().trim(),
+                        summaryThroughMessageId = toSummarize.last().id
+                    )
+                )
+            }
+        }
+    }
+
+    private fun estimateTokens(text: String): Int = TokenEstimator.estimate(text)
+
+    /**
+     * Room 消息历史 -> 协议无关的统一消息序列.
      *
      * @param limit 最多保留的历史消息条数，0 = 不限制。
      * @param upToId 只取到这条消息为止（重新生成 / 批注修订要排除被替换的旧答案）。
@@ -454,9 +533,10 @@ class AgentExecutor @Inject constructor(
     private suspend fun buildHistory(
         conversationId: Long,
         limit: Int,
-        upToId: Long = Long.MAX_VALUE
+        upToId: Long = Long.MAX_VALUE,
+        summaryThroughId: Long = 0
     ): List<UnifiedMessage> {
-        var entities = chatDao.getMessages(conversationId).filter { it.id <= upToId }
+        var entities = chatDao.getMessages(conversationId).filter { it.id > summaryThroughId && it.id <= upToId }
         if (limit > 0 && entities.size > limit) {
             entities = entities.takeLast(limit)
             while (entities.isNotEmpty() && entities.first().role != "user") {
@@ -505,6 +585,11 @@ class AgentExecutor @Inject constructor(
     }
 
     private companion object {
+        const val COMPRESSION_TRIGGER_TOKENS = 900_000
+        const val SUMMARY_MAX_TOKENS = 16_384
+        const val COMPRESSION_TARGET_TOKENS = 600_000
+        const val SUMMARY_SYSTEM_PROMPT = "Summarize the earlier conversation faithfully. Preserve decisions, requirements, facts, unresolved questions, and tool results. Be concise and structured; do not invent details."
+
         /** 图片编解码复用生产 Json 配置；图片字段固定，无需 ignoreUnknownKeys 之外的处理 */
         val imageJson = Json { ignoreUnknownKeys = true }
     }

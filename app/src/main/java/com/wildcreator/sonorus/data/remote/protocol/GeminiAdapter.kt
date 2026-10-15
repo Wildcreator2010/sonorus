@@ -123,7 +123,9 @@ class GeminiAdapter @Inject constructor(
             return StreamDelta(error = it["message"].asText() ?: "Gemini 返回错误")
         }
 
-        val candidate = root.arr("candidates")?.firstOrNull().asObject() ?: return null
+        val inputTokens = root.obj("usageMetadata")?.get("promptTokenCount").asIntOrNull()
+        val candidate = root.arr("candidates")?.firstOrNull().asObject()
+        if (candidate == null) return inputTokens?.let { StreamDelta(inputTokens = it) }
         // 末帧经常只有 finishReason 而没有 parts。这里若早退，收尾原因就整帧丢失 ——
         // "被 SAFETY 拦截"和"正常说完"将无法区分，半截答案会被当成完整回答。
         val parts = candidate.obj("content")?.arr("parts")
@@ -162,12 +164,13 @@ class GeminiAdapter @Inject constructor(
 
         val resultText = text.toString().takeIf { it.isNotEmpty() }
         val resultReasoning = reasoning.toString().takeIf { it.isNotEmpty() }
-        return if (resultText == null && resultReasoning == null && toolCalls.isEmpty() && finish == null) null
+        return if (resultText == null && resultReasoning == null && toolCalls.isEmpty() && finish == null && inputTokens == null) null
         else StreamDelta(
             text = resultText,
             reasoning = resultReasoning,
             toolCalls = toolCalls.takeIf { it.isNotEmpty() },
-            finish = finish
+            finish = finish,
+            inputTokens = inputTokens
         )
     }
 

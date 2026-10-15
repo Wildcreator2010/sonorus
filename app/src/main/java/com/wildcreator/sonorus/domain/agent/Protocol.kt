@@ -97,6 +97,8 @@ data class StreamDelta(
     val reasoning: String? = null,
     val toolCalls: List<ToolCallDelta>? = null,
     val finish: FinishReason? = null,
+    /** Provider-reported input token count when available. */
+    val inputTokens: Int? = null,
     /** 流内错误（部分提供商把报错放在 SSE data 里），非空时客户端转为 Error 事件 */
     val error: String? = null
 )

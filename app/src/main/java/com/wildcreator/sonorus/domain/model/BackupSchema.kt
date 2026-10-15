@@ -60,6 +60,8 @@ data class BackupConversation(
     val toolsEnabled: Boolean = true,
     /** 会话级思考等级覆盖；null = 跟随全局 */
     val thinkingLevel: String? = null,
+    val contextSummary: String? = null,
+    val summaryThroughMessageId: Long = 0,
     val createdAt: Long,
     val updatedAt: Long,
     val messages: List<BackupMessage> = emptyList()

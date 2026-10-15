@@ -189,6 +189,12 @@ class GeminiAdapterTest {
     }
 
     @Test
+    fun parseStream_usageMetadataProvidesInputTokens() {
+        val delta = adapter.parseStream(null, """{"usageMetadata":{"promptTokenCount":888},"candidates":[]}""")!!
+        assertEquals(888, delta.inputTokens)
+    }
+
+    @Test
     fun parseStream_纯文本收尾为STOP() {
         val data = """{"candidates":[{"content":{"parts":[{"text":"好的"}]},"finishReason":"STOP"}]}"""
         assertEquals(FinishReason.STOP, adapter.parseStream(null, data)!!.finish)

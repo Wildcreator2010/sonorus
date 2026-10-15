@@ -25,6 +25,9 @@ internal fun JsonElement?.asArray(): JsonArray? = this as? JsonArray
 internal fun JsonElement?.asInt(fallback: Int = 0): Int =
     (this as? JsonPrimitive)?.intOrNull ?: fallback
 
+internal fun JsonElement?.asIntOrNull(): Int? =
+    (this as? JsonPrimitive)?.intOrNull
+
 /** 布尔字段（Gemini 的 part.thought）；非布尔原样返回 null */
 internal fun JsonElement?.asBoolean(): Boolean? =
     (this as? JsonPrimitive)?.booleanOrNull
