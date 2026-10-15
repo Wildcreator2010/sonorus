@@ -1,6 +1,7 @@
 package com.wildcreator.sonorus.di
 
 import android.content.Context
+import android.util.Log
 import androidx.room.Room
 import com.wildcreator.sonorus.data.local.AppDatabase
 import com.wildcreator.sonorus.data.local.AppDatabase.Companion.MIGRATION_1_2
@@ -29,6 +30,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoMap
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -41,6 +43,8 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
+
+    private const val APP_SCOPE_TAG = "SonorusAppScope"
 
     @OptIn(ExperimentalSerializationApi::class)
     @Provides
@@ -124,12 +128,17 @@ object AppModule {
     /**
      * 进程级作用域：模型回合从这里启动，离开聊天页（ViewModel 销毁）不会取消正在流式的回答。
      * SupervisorJob —— 一轮失败/取消不能连带停掉后续其他会话的回合。
+     * CoroutineExceptionHandler —— 兜住逃逸出回合的异常：没有它，异常会走线程默认处理器，
+     * 用户看到的是闪退，而 `running` 同时卡在 true 把后续所有发送都锁死。
      */
     @Provides
     @Singleton
     @AppScope
-    fun provideAppScope(): CoroutineScope =
-        CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    fun provideAppScope(): CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, error ->
+            Log.w(APP_SCOPE_TAG, "回合逃逸异常已被作用域兜住，未崩进程", error)
+        }
+    )
 
     // ----- 仓库 -----
 

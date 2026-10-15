@@ -11,6 +11,7 @@ import com.wildcreator.sonorus.domain.model.ProviderDraft
 import com.wildcreator.sonorus.domain.model.ProviderProtocol
 import com.wildcreator.sonorus.domain.repository.ProviderRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -26,7 +27,16 @@ class ProviderListViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun delete(id: Long) {
-        viewModelScope.launch { repository.deleteProvider(id) }
+        viewModelScope.launch {
+            try {
+                repository.deleteProvider(id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 库里的级联删除已经提交，只剩密钥清理失败：该提供商已经不可达，
+                // 残留的加密条目不会被任何读取路径命中，不值得为它把界面崩掉
+            }
+        }
     }
 }
 
@@ -174,6 +184,12 @@ class ProviderEditViewModel @Inject constructor(
                     apiKey = "" // 明文密钥用完即清
                     done = true
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // SecretStore 用 commit() 并在写失败时主动抛（见其注释：要让用户当场知道没存上）。
+                // 让异常逃出 viewModelScope 等于闪退，用户看到的不是"保存失败"而是应用消失。
+                message = "保存失败：${e.message ?: "未知错误"}"
             } finally {
                 saving = false
             }

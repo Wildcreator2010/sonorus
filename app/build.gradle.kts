@@ -79,6 +79,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // 纯 JVM 单测里 android.jar 的方法默认抛 "not mocked"。
+        // AppModule 的 @AppScope 异常处理器要调 Log.w，兜底路径本身不该让测试炸掉。
+        unitTests.isReturnDefaultValues = true
+    }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
