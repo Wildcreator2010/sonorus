@@ -24,12 +24,16 @@ object ConversationExporter {
 
     fun toMarkdown(conversation: Conversation, messages: List<ChatMessage>): String {
         val sb = StringBuilder()
+        // 工具调用的 assistant 占位行没有正文字符，导出时跳过：它的信息由紧随其后的 tool 结果承载。
+        // 不跳过就会在导出文件里留下一个空的"### 助手"小节。
+        // 计数与正文用同一份过滤结果，否则"消息数"和下面的小节数会对不上。
+        val rendered = messages.filterNot { it.role == ChatRole.ASSISTANT && it.content.isBlank() }
         sb.append("# ").append(escapeMdHeading(conversation.title.ifBlank { "未命名会话" })).append('\n')
         sb.append('\n')
         sb.append("- 模型：`").append(conversation.modelId).append("`\n")
         sb.append("- 创建：").append(formatEpoch(conversation.createdAt)).append('\n')
         sb.append("- 导出：").append(formatEpoch(System.currentTimeMillis())).append('\n')
-        sb.append("- 消息数：").append(messages.size).append('\n')
+        sb.append("- 消息数：").append(rendered.size).append('\n')
         if (conversation.systemPrompt.isNotBlank()) {
             sb.append('\n').append("## System Prompt\n\n")
             // 用围栏代码块保留原始格式；围栏本身出现在 prompt 里时用更长围栏规避
@@ -40,7 +44,7 @@ object ConversationExporter {
         }
         sb.append('\n').append("## 对话\n")
 
-        messages.forEach { m ->
+        rendered.forEach { m ->
             sb.append('\n').append("### ").append(roleLabel(m.role, m.toolName)).append('\n')
             if (m.images.isNotEmpty()) {
                 sb.append('\n')

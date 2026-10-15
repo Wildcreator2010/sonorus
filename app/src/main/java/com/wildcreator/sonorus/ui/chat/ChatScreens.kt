@@ -393,6 +393,11 @@ fun ChatScreen(
     val lastAnswerId = remember(messages) {
         messages.lastOrNull { it.role == ChatRole.ASSISTANT && it.content.isNotBlank() }?.id
     }
+    // 工具调用的 assistant 占位行正文为空（只带 toolCalls）。它在对话历史里必须保留，
+    // 但在界面上不该出现 —— 之前它被渲染成空白气泡，看起来就像模型回了一条空消息。
+    val visibleMessages = remember(messages) {
+        messages.filterNot { it.role == ChatRole.ASSISTANT && it.content.isBlank() }
+    }
     val clipboard = LocalClipboardManager.current
 
     // 批注/重新生成的门控在屏幕层算一次再传下去：items 的 lambda 里只要读 agentState，
@@ -445,7 +450,7 @@ fun ChatScreen(
      * - 150ms 防抖合并高频 chunk，避免每个片段都触发滚动动画。
      */
     var lastScrollTime by remember { mutableStateOf(0L) }
-    LaunchedEffect(messages.size, agentState.streamingContent.length) {
+    LaunchedEffect(visibleMessages.size, agentState.streamingContent.length) {
         val info = listState.layoutInfo
         val lastIndex = info.totalItemsCount - 1
         if (lastIndex < 0) return@LaunchedEffect
@@ -498,7 +503,7 @@ fun ChatScreen(
                                 text = { Text("复制全部对话") },
                                 onClick = {
                                     menuExpanded = false
-                                    val all = messages.joinToString("\n\n") { m ->
+                                    val all = visibleMessages.joinToString("\n\n") { m ->
                                         val who = when (m.role) {
                                             ChatRole.USER -> "我"
                                             ChatRole.TOOL -> "工具 ${m.toolName ?: ""}"
@@ -591,7 +596,7 @@ fun ChatScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                items(messages, key = { it.id }) { message ->
+                items(visibleMessages, key = { it.id }) { message ->
                     MessageBubble(
                         message = message,
                         // 重新生成 / 批注修改只作用于最后一条回答（与后端能力一致）
