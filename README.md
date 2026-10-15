@@ -54,6 +54,17 @@ RELEASE_KEY_PASSWORD=...
 
 `gradle/wrapper` 里的 `distributionUrl` 指向腾讯镜像；官方源在你的网络环境下不通时，可自行改回 `services.gradle.org`。
 
+发版三步（顺序不能换）：
+
+```
+run-apk.bat                                  # 出包
+set GH_TOKEN=<你的 token>                     # 只给下一步用
+node tools/attach-release-asset.mjs           # 挂 APK 并发布草稿
+node tools/verify-release.mjs                 # 发布后校对
+```
+
+`attach-release-asset.mjs` 存在的理由：GitHub 网页的附件白名单里没有 `.apk`（选完只得到 "We don't support that file type."），而应用内更新要求 Release 带 `application/vnd.android.package-archive` 类型的资源，只能走 uploads.github.com。它会先断言 `--tag`、`build.gradle.kts` 的 versionName 与 Release 正文里的 `sha256` 三者对得上才上传，同名资源先删再传，可以反复跑。token 只从环境变量读，不写盘、不打印。加 `--no-publish` 就停在草稿上先检查一遍。
+
 发布之后跑一次校对：
 
 ```
