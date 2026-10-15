@@ -150,14 +150,22 @@ class ChatViewModel @Inject constructor(
      * 回合跑在 [runScope] 上：用户退出聊天页只是销毁 ViewModel，
      * 挂在 viewModelScope 会把 SSE 流取消在半截回答处。
      */
-    fun send(text: String, images: List<ImageAttachment> = emptyList()) {
+    fun send(
+        text: String,
+        images: List<ImageAttachment> = emptyList(),
+        replaceTailFromMessageId: Long? = null
+    ) {
         val trimmed = text.trim()
         // 纯图片（无文字）也允许发送
         if ((trimmed.isEmpty() && images.isEmpty()) || agentExecutor.state.value.running) return
         runScope.launch {
             val isAutoTitle = chatRepository.getConversation(conversationId)?.titleAuto == true
             try {
-                agentExecutor.send(conversationId, trimmed, images)
+                if (replaceTailFromMessageId != null) {
+                    agentExecutor.editAndResend(conversationId, replaceTailFromMessageId, trimmed, images)
+                } else {
+                    agentExecutor.send(conversationId, trimmed, images)
+                }
             } catch (e: CancellationException) {
                 // 用户点了停止：内容已在执行器里落库，标题生成就别做了
                 return@launch
@@ -270,8 +278,9 @@ class ChatViewModel @Inject constructor(
         runScope.launch {
             val target = chatRepository.getMessage(messageId) ?: return@launch
             if (target.role != ChatRole.USER) return@launch
-            chatRepository.deleteMessagesFrom(conversationId, messageId)
-            send(trimmed, target.images)
+            // 删尾与插新交给执行器在同一次事务里完成：分两步会留下"会话零消息"的空窗，
+            // 用户退回列表页的那一瞬间整条会话会被空会话清理删掉
+            send(trimmed, target.images, replaceTailFromMessageId = messageId)
         }
     }
 
@@ -281,6 +290,9 @@ class ChatViewModel @Inject constructor(
      * 否则会留下一个"标题来自已删除内容"的误导性名字。
      */
     fun clearMessages() {
+        // 先掐掉在跑的回合：否则本轮答案会照样插进"已清空"的会话，界面看起来清不干净，
+        // 而且旧消息消失后，重新生成/批注的锚点（最后一条 user 消息）会漂到错误的行上
+        agentExecutor.cancelRun(conversationId)
         viewModelScope.launch {
             chatRepository.clearMessages(conversationId)
             val conv = chatRepository.getConversation(conversationId) ?: return@launch

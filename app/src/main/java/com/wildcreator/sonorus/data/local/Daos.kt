@@ -70,6 +70,31 @@ interface ChatDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertConversation(conversation: ConversationEntity): Long
 
+    /**
+     * 会话可编辑字段的**定向**更新。
+     *
+     * 绝不能用 [upsertConversation] 代替：域模型 Conversation 不承载 `contextSummary` 与
+     * `summaryThroughMessageId`（它们由执行器压缩历史时写入，UI 既读不到也不该改写），
+     * 整行 REPLACE 会把这两列静默写成默认值 —— 已生成的摘要消失、压缩水位归零，
+     * 被摘要掉的旧消息重新进入上下文且不可恢复。
+     */
+    @Query(
+        "UPDATE conversations SET title = :title, titleAuto = :titleAuto, providerId = :providerId, " +
+            "modelId = :modelId, systemPrompt = :systemPrompt, toolsEnabled = :toolsEnabled, " +
+            "thinkingLevel = :thinkingLevel, updatedAt = :updatedAt WHERE id = :id"
+    )
+    suspend fun updateConversationFields(
+        id: Long,
+        title: String,
+        titleAuto: Boolean,
+        providerId: Long,
+        modelId: String,
+        systemPrompt: String,
+        toolsEnabled: Boolean,
+        thinkingLevel: String?,
+        updatedAt: Long
+    )
+
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteConversation(id: Long)
 
@@ -114,6 +139,25 @@ interface ChatDao {
     /** 编辑重发：删除该条及其之后的全部消息（id 自增，与列表排序一致） */
     @Query("DELETE FROM messages WHERE conversationId = :conversationId AND id >= :fromId")
     suspend fun deleteMessagesFrom(conversationId: Long, fromId: Long): Int
+
+    /**
+     * 编辑重发：在一次事务里「删掉锚点及其之后」+「插入改过的提问」，返回新消息 id。
+     *
+     * 分成两次调用会留下一个会话零消息的空窗，而 [deleteEmptyConversations] 只看消息表：
+     * 用户在这几十毫秒里退回列表页，整条会话就被清掉，随后插入的行因为没有外键
+     * 变成挂在已消失会话上的孤儿。事务保证任何观察者看到的都是"旧尾巴没了、新消息已经在"。
+     *
+     * `fromId = Long.MAX_VALUE` 时删不到任何行，等价于纯插入。
+     */
+    @Transaction
+    suspend fun replaceTailWithUserMessage(
+        conversationId: Long,
+        fromId: Long,
+        message: MessageEntity
+    ): Long {
+        deleteMessagesFrom(conversationId, fromId)
+        return insertMessage(message)
+    }
 
     /** 重新生成 / 批注修订：清掉这条消息之后的整次尝试（中间 tool 行与被替换的旧答案行） */
     @Query("DELETE FROM messages WHERE conversationId = :conversationId AND id > :afterId")

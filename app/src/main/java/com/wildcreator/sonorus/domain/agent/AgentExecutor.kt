@@ -4,6 +4,7 @@ import com.wildcreator.sonorus.data.local.ChatDao
 import com.wildcreator.sonorus.data.local.MessageEntity
 import com.wildcreator.sonorus.data.prefs.SettingsManager
 import com.wildcreator.sonorus.data.remote.ProviderApiClient
+import com.wildcreator.sonorus.data.remote.redactSecrets
 import com.wildcreator.sonorus.domain.model.AnswerVersion
 import com.wildcreator.sonorus.domain.model.ImageAttachment
 import com.wildcreator.sonorus.domain.model.MessageVariants
@@ -138,19 +139,46 @@ class AgentExecutor @Inject constructor(
         images: List<ImageAttachment> = emptyList()
     ) {
         val anchorId = withContext(Dispatchers.IO) {
-            chatDao.insertMessage(
-                MessageEntity(
-                    conversationId = conversationId,
-                    role = "user",
-                    content = userText,
-                    imagesJson = images.takeIf { it.isNotEmpty() }?.let {
-                        imageJson.encodeToString(ListSerializer(ImageAttachment.serializer()), it)
-                    }
-                )
+            chatDao.insertMessage(userMessageEntity(conversationId, userText, images))
+        }
+        runRound(conversationId, anchorId = anchorId, retired = null, instruction = null, note = null)
+    }
+
+    /**
+     * 编辑重发：删掉被编辑的提问及其之后的整段尾巴，同时插入改过的提问。
+     *
+     * 删与插必须落在同一次事务里（[ChatDao.replaceTailWithUserMessage]）：分两步会留下
+     * "会话零消息"的空窗，而会话列表页的空会话清理只看消息表 —— 用户退回列表的那几十毫秒，
+     * 整条会话就被删掉，随后插入的行因为没有外键成为孤儿。
+     */
+    suspend fun editAndResend(
+        conversationId: Long,
+        fromMessageId: Long,
+        userText: String,
+        images: List<ImageAttachment> = emptyList()
+    ) {
+        val anchorId = withContext(Dispatchers.IO) {
+            chatDao.replaceTailWithUserMessage(
+                conversationId,
+                fromMessageId,
+                userMessageEntity(conversationId, userText, images)
             )
         }
         runRound(conversationId, anchorId = anchorId, retired = null, instruction = null, note = null)
     }
+
+    private fun userMessageEntity(
+        conversationId: Long,
+        userText: String,
+        images: List<ImageAttachment>
+    ): MessageEntity = MessageEntity(
+        conversationId = conversationId,
+        role = "user",
+        content = userText,
+        imagesJson = images.takeIf { it.isNotEmpty() }?.let {
+            imageJson.encodeToString(ListSerializer(ImageAttachment.serializer()), it)
+        }
+    )
 
     /** 重新生成最后一条回答；没有可重生的回答时返回 false，由 UI 提示用户 */
     suspend fun regenerateLast(conversationId: Long): Boolean {
@@ -447,6 +475,14 @@ class AgentExecutor @Inject constructor(
                 contextLimit = _state.value.contextLimit
             )
             throw e
+        } catch (e: Exception) {
+            // 非取消的意外失败（Room 写库失败、DataStore IO 异常、畸形载荷）也必须收口：
+            // running 卡在 true 会锁死**所有**会话的发送闸门（UI 读的是全局单份 state），用户只能重启应用。
+            // 这里不再尝试任何数据库写入 —— 失败原因很可能正是数据库，再写一次只会把异常抛回去。
+            _state.value = AgentState(
+                conversationId = conversationId,
+                error = "本轮异常终止：${redactSecrets(e.message ?: e.javaClass.simpleName)}"
+            )
         } finally {
             currentJob = null
         }

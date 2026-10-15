@@ -42,9 +42,6 @@ interface ChatRepository {
 
     suspend fun getMessage(id: Long): ChatMessage?
 
-    /** 编辑重发：删除 [fromMessageId] 及其之后的全部消息 */
-    suspend fun deleteMessagesFrom(conversationId: Long, fromMessageId: Long)
-
     /** 切换回答的生效版本；content 列会同步为该版本文本 */
     suspend fun setActiveVersion(messageId: Long, index: Int)
 

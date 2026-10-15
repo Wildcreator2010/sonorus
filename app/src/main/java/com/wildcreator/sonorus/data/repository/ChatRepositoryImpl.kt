@@ -54,7 +54,18 @@ class ChatRepositoryImpl @Inject constructor(
     )
 
     override suspend fun updateConversation(conversation: Conversation) {
-        chatDao.upsertConversation(conversation.toEntity())
+        // 定向 UPDATE：整行 REPLACE 会把摘要列抹成默认值，见 ChatDao.updateConversationFields
+        chatDao.updateConversationFields(
+            id = conversation.id,
+            title = conversation.title,
+            titleAuto = conversation.titleAuto,
+            providerId = conversation.providerId,
+            modelId = conversation.modelId,
+            systemPrompt = conversation.systemPrompt,
+            toolsEnabled = conversation.toolsEnabled,
+            thinkingLevel = conversation.thinkingLevel?.name,
+            updatedAt = System.currentTimeMillis()
+        )
     }
 
     override suspend fun renameConversation(id: Long, title: String) {
@@ -77,10 +88,6 @@ class ChatRepositoryImpl @Inject constructor(
 
     override suspend fun getMessage(id: Long): ChatMessage? =
         chatDao.getMessage(id)?.toDomain()
-
-    override suspend fun deleteMessagesFrom(conversationId: Long, fromMessageId: Long) {
-        chatDao.deleteMessagesFrom(conversationId, fromMessageId)
-    }
 
     /**
      * 切换版本必须同时改 content —— 只动 activeVersion 会让「送模型的文本」和
@@ -119,19 +126,6 @@ internal fun ConversationEntity.toDomain() = Conversation(
     thinkingLevel = thinkingLevel?.let {
         runCatching { ThinkingLevel.valueOf(it) }.getOrNull()
     }
-)
-
-internal fun Conversation.toEntity() = ConversationEntity(
-    id = id,
-    title = title,
-    titleAuto = titleAuto,
-    providerId = providerId,
-    modelId = modelId,
-    systemPrompt = systemPrompt,
-    toolsEnabled = toolsEnabled,
-    thinkingLevel = thinkingLevel?.name,
-    createdAt = createdAt,
-    updatedAt = System.currentTimeMillis()
 )
 
 internal fun MessageEntity.toDomain(): ChatMessage {
