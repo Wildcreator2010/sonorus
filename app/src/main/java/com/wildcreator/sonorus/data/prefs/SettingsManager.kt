@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.wildcreator.sonorus.domain.agent.SystemPromptGuard
 import com.wildcreator.sonorus.domain.agent.ThinkingLevel
 import com.wildcreator.sonorus.ui.theme.FontScale
 import com.wildcreator.sonorus.ui.theme.ThemeMode
@@ -15,8 +16,15 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
-/** 默认 system prompt：新建会话时作为初始值 */
-const val DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
+/**
+ * 默认 system prompt：新建会话时作为初始值。
+ *
+ * 这里直接内嵌 [SystemPromptGuard.RULES]，用户在设置页能看见并自行调整；
+ * 而请求组装处仍会调用 [SystemPromptGuard.apply] 兜底 —— 改过 prompt 的会话、
+ * 默认值升级前就已存在的会话都不会漏掉纪律约束。
+ */
+const val DEFAULT_SYSTEM_PROMPT =
+    "你是 Sonorus 中的助手：回答准确、简洁，使用与用户相同的语言。\n\n" + SystemPromptGuard.RULES
 
 /** 上下文长度（消息条数）取值：0 表示不限制 */
 const val CONTEXT_LIMIT_UNLIMITED = 0

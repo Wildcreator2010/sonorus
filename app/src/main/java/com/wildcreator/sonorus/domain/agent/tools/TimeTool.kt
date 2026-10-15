@@ -1,6 +1,7 @@
 package com.wildcreator.sonorus.domain.agent.tools
 
 import com.wildcreator.sonorus.domain.agent.AgentTool
+import com.wildcreator.sonorus.domain.agent.ToolResult
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -15,8 +16,8 @@ class TimeTool : AgentTool {
         put("properties", buildJsonObject { })
     }
 
-    override suspend fun execute(argumentsJson: String): String {
+    override suspend fun execute(argumentsJson: String): ToolResult {
         val now = ZonedDateTime.now()
-        return now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss EEEE (z)"))
+        return ToolResult(true, now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss EEEE (z)")))
     }
 }

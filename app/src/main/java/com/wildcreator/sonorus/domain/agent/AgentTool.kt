@@ -16,6 +16,11 @@ interface AgentTool {
     /** 参数 JSON Schema 对象 */
     val parameters: JsonObject
 
-    /** 执行工具，argumentsJson 为模型输出的 arguments 字符串；返回给模型的文本结果 */
-    suspend fun execute(argumentsJson: String): String
+    /**
+     * 执行工具，argumentsJson 为模型输出的 arguments 字符串。
+     *
+     * 失败要用 [ToolResult.ok] = false 表达，不要靠抛异常、也不要只返回一句错误文案：
+     * 执行器凭这个标志统计"同一工具反复失败"，靠文案猜失败等于这条刹车不存在。
+     */
+    suspend fun execute(argumentsJson: String): ToolResult
 }

@@ -230,6 +230,8 @@ class AgentExecutor @Inject constructor(
 
             val maxIterations = 8
             var iterations = 0
+            // 业务级放弃条件：识别重复调用与反复失败，别把 8 轮全烧在同一个不可能成功的调用上
+            val toolGuard = ToolCallGuard()
             // 思考等级：会话级覆盖优先，其次全局默认。
             // 注意 conversation 是 Room 实体，thinkingLevel 为 String?，需显式转换；
             // 存量数据的非法值（理论上不会出现）按"跟随全局"处理而不是崩溃。
@@ -268,7 +270,12 @@ class AgentExecutor @Inject constructor(
                     }
                 val request = UnifiedChatRequest(
                     model = conversation.modelId,
-                    systemPrompt = activeConversation.systemPrompt + activeConversation.contextSummary?.let { "\n\n[Earlier conversation summary]\n$it" }.orEmpty(),
+                    // 纪律约束在这里追加，而不是只改默认 prompt：改过 prompt 的会话、
+                    // 升级前就存在的老会话都必须拿到同样的约束，且顺序恒为 人设→摘要→纪律
+                    systemPrompt = SystemPromptGuard.compose(
+                        activeConversation.systemPrompt,
+                        activeConversation.contextSummary
+                    ),
                     messages = history,
                     tools = if (toolsEnabled) toolRegistry.specs() else null,
                     thinkingLevel = thinking
@@ -281,6 +288,8 @@ class AgentExecutor @Inject constructor(
 
                 contentSb.setLength(0)
                 reasoningSb.setLength(0)
+                // 每轮新建：过滤状态只在单次流内有效，跨轮复用会把下一轮正文吃掉
+                val visibleFilter = VisibleTextFilter()
                 // 每轮单独记收尾原因：工具调用轮会以 tool_calls 收尾，不能污染最终轮的判定
                 var iterationFinish: FinishReason? = null
                 val toolCalls = sortedMapOf<Int, ToolCallBuilder>()
@@ -302,11 +311,16 @@ class AgentExecutor @Inject constructor(
                                 )
                             }
                             delta.text?.let { piece ->
-                                contentSb.append(piece)
-                                _state.value = _state.value.copy(
-                                    phase = RunPhase.ANSWERING,
-                                    streamingContent = contentSb.toString()
-                                )
+                                // 思维链可能被网关塞进 content（而不是 reasoning 字段）：
+                                // 用户可见文本一律先过过滤器再累积、再进 UI 状态
+                                val visible = visibleFilter.accept(piece)
+                                if (visible.isNotEmpty()) {
+                                    contentSb.append(visible)
+                                    _state.value = _state.value.copy(
+                                        phase = RunPhase.ANSWERING,
+                                        streamingContent = contentSb.toString()
+                                    )
+                                }
                             }
                             delta.toolCalls?.forEach { tc ->
                                 val builder = toolCalls.getOrPut(tc.index) { ToolCallBuilder() }
@@ -322,8 +336,13 @@ class AgentExecutor @Inject constructor(
                     }
                 }
 
+                // 冲掉过滤器里滞留的尾巴：正常文本会补上，未闭合的思维链会被丢弃
+                visibleFilter.finish().let { tail ->
+                    if (tail.isNotEmpty()) contentSb.append(tail)
+                }
+
                 if (streamError != null) {
-                    _state.value = AgentState(conversationId = conversationId, error = streamError)
+                    failRound(conversationId, retired, streamError)
                     return@withContext
                 }
 
@@ -339,26 +358,32 @@ class AgentExecutor @Inject constructor(
                         )
                     )
                     // 2) 本地执行并落库工具结果
+                    //
+                    // 即使本轮要终止，也必须为**每一个** call 写回一条 tool 结果：
+                    // assistant 的 tool_calls 与 tool 结果是配对结构，少一条就是孤立 tool_result，
+                    // Anthropic 会直接 400，那段历史从此不可用。
+                    var stopReason: String? = null
                     for (call in calls) {
                         _state.value = _state.value.copy(
                             phase = RunPhase.TOOL,
                             toolLabel = call.name,
                             streamingContent = ""
                         )
-                        val tool = toolRegistry.find(call.name)
-                        val result = runCatching {
-                            tool?.execute(call.arguments)
-                                ?: "错误：未注册的工具 ${call.name}"
-                        }.getOrElse { "工具执行异常：${it.message}" }
+                        val outcome = runToolCall(toolGuard, call, stopReason)
+                        if (stopReason == null) stopReason = outcome.stopReason
                         chatDao.insertMessage(
                             MessageEntity(
                                 conversationId = conversationId,
                                 role = "tool",
-                                content = result,
+                                content = outcome.resultText,
                                 toolCallId = call.id,
                                 toolName = call.name
                             )
                         )
+                    }
+                    if (stopReason != null) {
+                        failRound(conversationId, retired, stopReason)
+                        return@withContext
                     }
                     _state.value = _state.value.copy(
                         phase = RunPhase.WAITING,
@@ -371,10 +396,14 @@ class AgentExecutor @Inject constructor(
                 // 最终答复
                 val finalText = contentSb.toString()
                 if (finalText.isBlank()) {
-                    _state.value = AgentState(
-                        conversationId = conversationId,
-                        error = "模型返回空内容（可能是协议或端点不匹配）"
-                    )
+                    // 全被过滤掉说明模型把答复写进了思维链块；此时绝不能退回显示原文，
+                    // 否则就是用户投诉的"把思考过程当回复"
+                    val emptyError = if (visibleFilter.strippedAnything) {
+                        "模型这一轮只返回了思考内容，没有可展示的答复（思考内容已在客户端剥离）"
+                    } else {
+                        "模型返回空内容（可能是协议或端点不匹配）"
+                    }
+                    failRound(conversationId, retired, emptyError)
                     return@withContext
                 }
                 persistAnswer(conversationId, retired, note, finalText, reasoningSb.toString())
@@ -395,18 +424,21 @@ class AgentExecutor @Inject constructor(
                 }
                 return@withContext
             }
-            _state.value = AgentState(
-                conversationId = conversationId,
-                error = "工具调用轮次超限（$maxIterations）"
+            failRound(
+                conversationId,
+                retired,
+                "工具调用轮次超限（$maxIterations）"
             )
         } catch (e: CancellationException) {
-            // 用户点了停止：已流出的内容仍算一版回答，不能丢
-            if (contentSb.isNotEmpty()) {
-                withContext(NonCancellable) {
+            // 用户点了停止：已流出的内容仍算一版回答，不能丢；一条都没流出时要把旧答案放回去
+            withContext(NonCancellable) {
+                if (contentSb.isNotEmpty()) {
                     persistAnswer(
                         conversationId, retired, note,
                         contentSb.toString(), reasoningSb.toString()
                     )
+                } else {
+                    restoreRetired(conversationId, retired)
                 }
             }
             _state.value = AgentState(
@@ -450,6 +482,84 @@ class AgentExecutor @Inject constructor(
         chatDao.getConversation(conversationId)?.let {
             chatDao.upsertConversation(it.copy(updatedAt = System.currentTimeMillis()))
         }
+    }
+
+    /** 单个工具调用的产出：回填给模型的文本 + 这条是否要求终止本轮 */
+    private data class ToolCallOutcome(val resultText: String, val stopReason: String?)
+
+    /**
+     * 解析工具名 → 登记并计数 → 执行 → 登记成败。
+     *
+     * 三条终止条件都在这里收口：解析不出已注册工具（确定性错误，重试不可能成功）、
+     * [ToolCallGuard] 判定原地打转、同一工具反复失败。线上那个死循环正是"把错误喂回模型 →
+     * 模型原样重调"刷满 8 轮造成的，所以这里宁可直接结束本轮。
+     * 计数一律用 resolve 出来的注册名，用模型给的名字会被拼写漂移绕过。
+     */
+    private suspend fun runToolCall(
+        guard: ToolCallGuard,
+        call: ToolCall,
+        alreadyStopped: String?
+    ): ToolCallOutcome {
+        if (alreadyStopped != null) return ToolCallOutcome("错误：本轮已终止，该调用未执行", null)
+
+        val tool = toolRegistry.resolve(call.name)
+            ?: return ToolCallOutcome(
+                resultText = "错误：未注册的工具 ${call.name}",
+                stopReason = "模型请求了未注册的工具 ${call.name}" +
+                    "（可用工具：" + toolRegistry.all().joinToString("、") { it.name } + "）"
+            )
+
+        val verdict = guard.register(call, tool.name)
+        if (verdict is ToolCallGuard.Verdict.Stop) {
+            return ToolCallOutcome("错误：本轮已终止，该调用未执行", verdict.reason)
+        }
+
+        val result = runCatching { tool.execute(call.arguments) }
+            .getOrElse { return abortedToolCall(guard, tool.name, "工具执行异常：${it.message}") }
+        val failureVerdict = guard.recordResult(tool.name, failed = !result.ok)
+        return ToolCallOutcome(
+            resultText = result.text,
+            stopReason = (failureVerdict as? ToolCallGuard.Verdict.Stop)?.reason
+        )
+    }
+
+    /** 抛异常的工具调用：异常本身没有 ToolResult.ok 可用，按失败计入计数 */
+    private suspend fun abortedToolCall(
+        guard: ToolCallGuard,
+        toolName: String,
+        message: String
+    ): ToolCallOutcome {
+        val verdict = guard.recordResult(toolName, failed = true)
+        return ToolCallOutcome(message, (verdict as? ToolCallGuard.Verdict.Stop)?.reason)
+    }
+
+    /**
+     * 把「重新生成 / 按批注修改」前读出的旧回答原样写回。
+     *
+     * runRound 开头就 deleteMessagesAfter 删掉了旧回答行，此后旧内容只活在内存里的
+     * [Retired] 中。任何没产出新答复就收口的路径都必须先走这里，否则用户看到的是
+     * 那条回答凭空消失 —— 失败不该顺带删内容。
+     */
+    private suspend fun restoreRetired(conversationId: Long, retired: Retired?) {
+        if (retired == null) return
+        if (chatDao.getConversation(conversationId) == null) return
+        val (mirror, versionsJson, active) =
+            MessageVariants.entry(retired.versions, retired.versions.lastIndex)
+        chatDao.insertMessage(
+            MessageEntity(
+                conversationId = conversationId,
+                role = "assistant",
+                content = mirror,
+                versionsJson = versionsJson,
+                activeVersion = active
+            )
+        )
+    }
+
+    /** 本轮以错误收口：先把旧答案放回去，再把错误交给界面 */
+    private suspend fun failRound(conversationId: Long, retired: Retired?, error: String) {
+        restoreRetired(conversationId, retired)
+        _state.value = AgentState(conversationId = conversationId, error = error)
     }
 
     /**

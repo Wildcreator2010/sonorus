@@ -1,6 +1,7 @@
 package com.wildcreator.sonorus.domain.agent.tools
 
 import com.wildcreator.sonorus.domain.agent.AgentTool
+import com.wildcreator.sonorus.domain.agent.ToolResult
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -38,20 +39,21 @@ class CalculatorTool : AgentTool {
         put("required", buildJsonArray { add(JsonPrimitive("expression")) })
     }
 
-    override suspend fun execute(argumentsJson: String): String {
+    override suspend fun execute(argumentsJson: String): ToolResult {
         val expr = runCatching {
             Json.parseToJsonElement(argumentsJson).jsonObject["expression"]?.jsonPrimitive?.content
-        }.getOrNull() ?: return "错误：缺少 expression 参数"
+        }.getOrNull() ?: return ToolResult(false, "错误：缺少 expression 参数")
 
         return try {
             val value = Parser(expr).parse()
-            if (value.isFinite() && value == floor(value) && abs(value) < 1e15) {
+            val text = if (value.isFinite() && value == floor(value) && abs(value) < 1e15) {
                 value.toLong().toString()
             } else {
                 value.toString()
             }
+            ToolResult(true, text)
         } catch (e: Exception) {
-            "计算失败：${e.message}"
+            ToolResult(false, "计算失败：${e.message}")
         }
     }
 
