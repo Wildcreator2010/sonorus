@@ -30,8 +30,8 @@ android {
         applicationId = "com.wildcreator.sonorus"
         minSdk = 26 // Android 8.0
         targetSdk = 34
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 7
+        versionName = "0.1.6"
     }
 
     signingConfigs {
@@ -78,6 +78,8 @@ android {
     }
     buildFeatures {
         compose = true
+        // 更新日志要拿编译期版本号做"日志版本 == APK 版本"的断言（见 ChangelogTest）
+        buildConfig = true
     }
     testOptions {
         // 纯 JVM 单测里 android.jar 的方法默认抛 "not mocked"。

@@ -7,6 +7,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import com.wildcreator.sonorus.ui.changelog.ChangelogHost
+import com.wildcreator.sonorus.ui.changelog.ChangelogViewModel
 import com.wildcreator.sonorus.ui.navigation.WildNavGraph
 import com.wildcreator.sonorus.ui.theme.RootViewModel
 import com.wildcreator.sonorus.ui.theme.SonorusTheme
@@ -24,6 +26,9 @@ class MainActivity : ComponentActivity() {
      */
     private val updateViewModel: UpdateViewModel by viewModels()
 
+    /** 同理：更新日志的"这次启动弹不弹"也只能判一次 */
+    private val changelogViewModel: ChangelogViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -35,7 +40,9 @@ class MainActivity : ComponentActivity() {
                 fontScale = fontScale
             ) {
                 AppUpdateHost(viewModel = updateViewModel) {
-                    WildNavGraph()
+                    ChangelogHost(viewModel = changelogViewModel) {
+                        WildNavGraph()
+                    }
                 }
             }
         }

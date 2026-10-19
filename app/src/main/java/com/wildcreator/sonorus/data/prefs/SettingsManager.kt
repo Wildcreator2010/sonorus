@@ -43,6 +43,7 @@ class SettingsManager(private val context: Context) {
         val FONT_SCALE = floatPreferencesKey("font_scale")
         val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check_at")
         val DISMISSED_UPDATE = stringPreferencesKey("dismissed_update_version")
+        val CHANGELOG_SEEN = stringPreferencesKey("changelog_seen_version")
     }
 
     val lastProviderId: Flow<Long?> = context.dataStore.data.map { it[Keys.LAST_PROVIDER_ID] }
@@ -103,6 +104,15 @@ class SettingsManager(private val context: Context) {
             if (version.isNullOrBlank()) prefs.remove(Keys.DISMISSED_UPDATE)
             else prefs[Keys.DISMISSED_UPDATE] = version
         }
+    }
+
+    /** 用户看过更新日志的版本；null = 从没弹过（首装也弹一次） */
+    val changelogSeenVersion: Flow<String?> = context.dataStore.data.map {
+        it[Keys.CHANGELOG_SEEN]
+    }
+
+    suspend fun saveChangelogSeenVersion(version: String) {
+        context.dataStore.edit { prefs -> prefs[Keys.CHANGELOG_SEEN] = version }
     }
 
     suspend fun saveThinkingLevel(level: ThinkingLevel) {
