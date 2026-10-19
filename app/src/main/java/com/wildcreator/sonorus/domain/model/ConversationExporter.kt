@@ -150,7 +150,7 @@ object ConversationExporter {
         return "`".repeat(maxOf(3, longest + 1))
     }
 
-    /** 极简时间戳格式化：避免为了导出引入 java.time 依赖（minSdk 26 也支持，但用 SimpleDateFormat 更轻） */
+    /** 极简时间戳格式化：java.time 要 API 26，本工程最低 API 23，只能用 SimpleDateFormat */
     private fun formatEpoch(epochMs: Long): String {
         if (epochMs <= 0L) return "-"
         return runCatching {

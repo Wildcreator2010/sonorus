@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 仅 debug 变体：API 23–27 上 network_security_config 不生效（或被覆盖成允许），
+     这个属性覆盖主清单的 usesCleartextTraffic="false"，方便连局域网自建网关。release 不受影响。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic" />
+</manifest>

@@ -19,7 +19,9 @@
       3) 明文开关不写死在 Manifest，避免 release 被覆盖；
       4) 下载的 APK 只落在 cache/apk、分享用的会话导出只落在 cache/share，
          两者都经 FileProvider 以 content:// 授权单次可读，不写外部存储，
-         避免其他应用读到待安装包或会话内容。
+         避免其他应用读到待安装包或会话内容；
+      5) usesCleartextTraffic 是给 API 23–27 的保险：network_security_config 要 API 24 才生效，
+         而这些版本默认允许明文，只写配置文件等于漏禁（debug 变体自己覆盖回 true）。
     -->
     <application
         android:name=".SonorusApp"
@@ -30,6 +32,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@style/Theme.Sonorus">
 

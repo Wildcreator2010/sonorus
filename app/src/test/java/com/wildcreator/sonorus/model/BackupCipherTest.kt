@@ -1,6 +1,8 @@
 package com.wildcreator.sonorus.model
 
 import com.wildcreator.sonorus.domain.model.BackupCipher
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -117,7 +119,41 @@ class BackupCipherTest {
         assertFalse("容器不该是空壳", container.isEmpty())
     }
 
+    @Test
+    fun 兜底PBKDF2与平台实现逐字节一致() {
+        // 单测的 JVM 一定有 PBKDF2WithHmacSHA256，所以走不到兜底分支；
+        // 这里直接调兜底函数，拿平台实现当参照物 —— 两者必须一模一样，否则 Android 6/7 导出的备份在新机器上打不开。
+        val cases = listOf(
+            DeriveCase("correct horse battery staple", 1, 256),
+            DeriveCase("口令含中文与 emoji 🙂", 2, 256),
+            DeriveCase("pw", 10_000, 256),
+            // 48 字节跨两个分块，验证分块序号与拼接
+            DeriveCase("multi-block", 64, 384)
+        )
+        val salt = ByteArray(16) { (it * 7 + 3).toByte() }
+
+        for (c in cases) {
+            val fromPlatform = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+                .generateSecret(PBEKeySpec(c.passphrase.toCharArray(), salt, c.rounds, c.keyBits))
+                .encoded
+            val fromFallback = BackupCipher.pbkdf2HmacSha256(
+                c.passphrase.toByteArray(Charsets.UTF_8), salt, c.rounds, c.keyBits / 8
+            )
+
+            assertArrayEqualsSafe(
+                "rounds=${c.rounds} keyBits=${c.keyBits} 口令=${c.passphrase}",
+                fromPlatform, fromFallback
+            )
+        }
+    }
+
+    private data class DeriveCase(val passphrase: String, val rounds: Int, val keyBits: Int)
+
     private fun assertArrayEqualsSafe(expected: ByteArray, actual: ByteArray) {
         org.junit.Assert.assertArrayEquals(expected, actual)
+    }
+
+    private fun assertArrayEqualsSafe(message: String, expected: ByteArray, actual: ByteArray) {
+        org.junit.Assert.assertArrayEquals(message, expected, actual)
     }
 }

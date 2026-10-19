@@ -2,9 +2,11 @@ package com.wildcreator.sonorus.domain.model
 
 import java.io.ByteArrayOutputStream
 import java.security.GeneralSecurityException
+import java.security.NoSuchAlgorithmException
 import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
+import javax.crypto.Mac
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
@@ -97,8 +99,60 @@ object BackupCipher {
     }
 
     private fun deriveKey(passphrase: String, salt: ByteArray): SecretKeySpec {
-        val spec = PBEKeySpec(passphrase.toCharArray(), salt, PBKDF2_ROUNDS, KEY_BITS)
-        val key = SecretKeyFactory.getInstance(PBKDF2_ALGORITHM).generateSecret(spec)
-        return SecretKeySpec(key.encoded, KEY_ALGORITHM)
+        val derived = try {
+            SecretKeyFactory.getInstance(PBKDF2_ALGORITHM)
+                .generateSecret(PBEKeySpec(passphrase.toCharArray(), salt, PBKDF2_ROUNDS, KEY_BITS))
+                .encoded
+        } catch (e: NoSuchAlgorithmException) {
+            // Android 8.0（API 26）以下的平台 provider 只注册了 PBKDF2WithHmacSHA1，没有 SHA256 变体。
+            // 兜底实现必须逐字节等价，否则旧设备上导出的备份在新设备上解不开（反之亦然）。
+            pbkdf2HmacSha256(passphrase.toByteArray(Charsets.UTF_8), salt, PBKDF2_ROUNDS, KEY_BITS / 8)
+        }
+        return SecretKeySpec(derived, KEY_ALGORITHM)
+    }
+
+    /**
+     * 只用 `Mac("HmacSHA256")` 拼出来的 PBKDF2（RFC 2898 §5.2），给没有 SHA256 变体 provider 的旧设备兜底。
+     * 内部不分配中间数组：21 万轮在十年前的机器上本来就以秒计，多分配一轮就是一次 GC。
+     */
+    internal fun pbkdf2HmacSha256(password: ByteArray, salt: ByteArray, rounds: Int, keyBytes: Int): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(password, "HmacSHA256"))
+        val hLen = mac.macLength
+
+        val u = ByteArray(hLen)
+        val t = ByteArray(hLen)
+        val next = ByteArray(hLen)
+        val out = ByteArray(keyBytes)
+        var offset = 0
+        var blockIndex = 1
+        while (offset < keyBytes) {
+            // U1 = PRF(Password, Salt || INT_32_BE(i))
+            mac.update(salt)
+            mac.update(
+                byteArrayOf(
+                    (blockIndex shr 24).toByte(),
+                    (blockIndex shr 16).toByte(),
+                    (blockIndex shr 8).toByte(),
+                    blockIndex.toByte()
+                )
+            )
+            mac.doFinal(u, 0)
+            u.copyInto(t)
+            for (r in 2..rounds) {
+                // Ur = PRF(Password, Ur-1)，T = T xor Ur
+                mac.update(u)
+                mac.doFinal(next, 0)
+                for (i in 0 until hLen) {
+                    t[i] = (t[i].toInt() xor next[i].toInt()).toByte()
+                    u[i] = next[i]
+                }
+            }
+            val take = minOf(hLen, keyBytes - offset)
+            t.copyInto(out, offset, 0, take)
+            offset += take
+            blockIndex++
+        }
+        return out
     }
 }

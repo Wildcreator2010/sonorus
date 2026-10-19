@@ -5,8 +5,9 @@ import com.wildcreator.sonorus.domain.agent.ToolResult
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class TimeTool : AgentTool {
     override val name = "get_current_time"
@@ -17,7 +18,8 @@ class TimeTool : AgentTool {
     }
 
     override suspend fun execute(argumentsJson: String): ToolResult {
-        val now = ZonedDateTime.now()
-        return ToolResult(true, now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss EEEE (z)")))
+        // java.time 要 API 26，本工程最低 API 23，只能用 SimpleDateFormat
+        val now = SimpleDateFormat("yyyy-MM-dd HH:mm:ss EEEE (z)", Locale.getDefault()).format(Date())
+        return ToolResult(true, now)
     }
 }
