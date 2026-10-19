@@ -25,20 +25,25 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.NavigateBefore
@@ -70,6 +75,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -79,6 +85,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -99,6 +106,7 @@ import com.wildcreator.sonorus.domain.model.ChatMessage
 import com.wildcreator.sonorus.domain.model.ChatRole
 import com.wildcreator.sonorus.domain.model.Conversation
 import com.wildcreator.sonorus.domain.model.ImageAttachment
+import com.wildcreator.sonorus.ui.donate.DonateDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -121,6 +129,7 @@ fun ConversationListScreen(
     var renaming by remember { mutableStateOf<Conversation?>(null) }
     // 删除会话不可恢复，必须二次确认——避免列表项右手的删除图标被误触
     var deleting by remember { mutableStateOf<Conversation?>(null) }
+    var showDonate by remember { mutableStateOf(false) }
 
     // 自动删除空对话。用「重新进入 composition」而不是 ON_RESUME 作为可见信号：
     // 全部导航都在同一 Activity 内，pop 回列表不会派发任何生命周期事件。
@@ -131,6 +140,9 @@ fun ConversationListScreen(
             TopAppBar(
                 title = { Text("Sonorus") },
                 actions = {
+                    IconButton(onClick = { showDonate = true }) {
+                        Icon(Icons.Default.FavoriteBorder, contentDescription = "捐赠")
+                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Tune, contentDescription = "设置")
                     }
@@ -185,6 +197,10 @@ fun ConversationListScreen(
                 }
             }
         }
+    }
+
+    if (showDonate) {
+        DonateDialog(onDismiss = { showDonate = false })
     }
 
     renaming?.let { target ->
@@ -590,74 +606,82 @@ fun ChatScreen(
                 .padding(padding)
                 .imePadding()
         ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(visibleMessages, key = { it.id }) { message ->
-                    MessageBubble(
-                        message = message,
-                        // 重新生成 / 批注修改只作用于最后一条回答（与后端能力一致）
-                        canRevise = canReviseNow &&
-                            message.role == ChatRole.ASSISTANT &&
-                            message.content.isNotBlank() &&
-                            message.id == lastAnswerId,
-                        onCopy = {
-                            if (message.content.isNotBlank()) {
-                                clipboard.setText(AnnotatedString(message.content))
-                                scope.launch { snackbar.showSnackbar("已复制该条消息") }
-                            }
-                        },
-                        onEditResend = { editingMessage = message },
-                        onRegenerate = {
-                            viewModel.regenerate {
-                                scope.launch { snackbar.showSnackbar("这条会话还没有可重新生成的回答") }
-                            }
-                        },
-                        onAnnotate = { annotatingMessage = message },
-                        onSwitchVersion = { index -> viewModel.switchVersion(message.id, index) }
-                    )
-                }
-                if (agentState.running) {
-                    item(key = "streaming") {
-                        StreamingIndicator(agentState)
+            // 消息区：右上角浮一对"回到开头 / 回到结尾"按钮，所以外面要包一层 Box
+            Box(modifier = Modifier.weight(1f)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(visibleMessages, key = { it.id }) { message ->
+                        MessageBubble(
+                            message = message,
+                            // 重新生成 / 批注修改只作用于最后一条回答（与后端能力一致）
+                            canRevise = canReviseNow &&
+                                message.role == ChatRole.ASSISTANT &&
+                                message.content.isNotBlank() &&
+                                message.id == lastAnswerId,
+                            onCopy = {
+                                if (message.content.isNotBlank()) {
+                                    clipboard.setText(AnnotatedString(message.content))
+                                    scope.launch { snackbar.showSnackbar("已复制该条消息") }
+                                }
+                            },
+                            onEditResend = { editingMessage = message },
+                            onRegenerate = {
+                                viewModel.regenerate {
+                                    scope.launch { snackbar.showSnackbar("这条会话还没有可重新生成的回答") }
+                                }
+                            },
+                            onAnnotate = { annotatingMessage = message },
+                            onSwitchVersion = { index -> viewModel.switchVersion(message.id, index) }
+                        )
                     }
-                }
-                agentState.error?.let { err ->
-                    item(key = "error") {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    err,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
+                    if (agentState.running) {
+                        item(key = "streaming") {
+                            StreamingIndicator(agentState)
+                        }
+                    }
+                    agentState.error?.let { err ->
+                        item(key = "error") {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer
                                 )
-                                Row {
-                                    TextButton(
-                                        // 执行器全局单槽：别的会话在后台续写时这一轮发不出去，
-                                        // 不禁掉就会"点了毫无反应"
-                                        enabled = !runningElsewhere,
-                                        onClick = {
-                                            viewModel.dismissError()
-                                            if (lastSent.isNotBlank()) viewModel.send(lastSent)
-                                        }
-                                    ) { Text("重试") }
-                                    TextButton(onClick = { viewModel.dismissError() }) { Text("忽略") }
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        err,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                    Row {
+                                        TextButton(
+                                            // 执行器全局单槽：别的会话在后台续写时这一轮发不出去，
+                                            // 不禁掉就会"点了毫无反应"
+                                            enabled = !runningElsewhere,
+                                            onClick = {
+                                                viewModel.dismissError()
+                                                if (lastSent.isNotBlank()) viewModel.send(lastSent)
+                                            }
+                                        ) { Text("重试") }
+                                        TextButton(onClick = { viewModel.dismissError() }) { Text("忽略") }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
+                ScrollJumpButtons(
+                    listState = listState,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+                )
             }
 
             // 上下文状态条：让"这次到底送了多少"可见，避免用户误以为模型失忆是 bug
@@ -1467,6 +1491,76 @@ private fun AttachmentImage(
                 contentDescription = null,
                 contentScale = contentScale,
                 modifier = Modifier.matchParentSize()
+            )
+        }
+    }
+}
+
+/**
+ * 「回到对话开头 / 结尾」两个竖排小钮，浮在消息区右上角。
+ *
+ * 只在真的滚得动时出现：短对话里按了没任何反应，摆着反而像坏了。
+ * 顶栏那一行只有 64dp 高，放不下竖排两个按钮，所以浮在列表上而不是塞进 actions。
+ */
+@Composable
+private fun ScrollJumpButtons(
+    listState: LazyListState,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val scrollable by remember {
+        derivedStateOf { listState.canScrollBackward || listState.canScrollForward }
+    }
+    if (!scrollable) return
+
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        JumpButton(Icons.Default.ArrowUpward, "回到对话开头") {
+            scope.launch { listState.animateScrollToItem(0) }
+        }
+        JumpButton(Icons.Default.ArrowDownward, "回到对话结尾") {
+            scope.launch { scrollToListEnd(listState) }
+        }
+    }
+}
+
+/**
+ * 滚到最后一条的**尾部**。
+ *
+ * 单步 `animateScrollToItem(lastIndex)` 只会把最后一条的开头对齐到视口上沿，
+ * 长回答的最新几行仍在屏幕下面 —— 那不是用户要的"回到结尾"。
+ * 第一步之后才知道它有多高，所以分两步。
+ */
+private suspend fun scrollToListEnd(listState: LazyListState) {
+    val lastIndex = listState.layoutInfo.totalItemsCount - 1
+    if (lastIndex < 0) return
+    listState.animateScrollToItem(lastIndex)
+
+    val info = listState.layoutInfo
+    val last = info.visibleItemsInfo.lastOrNull { it.index == lastIndex } ?: return
+    val viewportHeight = info.viewportEndOffset - info.viewportStartOffset
+    val tailOffset = (last.size - viewportHeight).coerceAtLeast(0)
+    if (tailOffset > 0) listState.animateScrollToItem(lastIndex, tailOffset)
+}
+
+@Composable
+private fun JumpButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        tonalElevation = 3.dp,
+        modifier = Modifier
+            .size(36.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                icon,
+                contentDescription = description,
+                modifier = Modifier.size(20.dp)
             )
         }
     }
