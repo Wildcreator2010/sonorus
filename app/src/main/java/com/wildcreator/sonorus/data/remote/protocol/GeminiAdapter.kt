@@ -21,6 +21,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -36,6 +37,12 @@ import javax.inject.Singleton
 class GeminiAdapter @Inject constructor(
     private val json: Json
 ) : ProtocolAdapter {
+
+    /**
+     * Gemini 的 functionCall 不带跨帧唯一的序号；用进程内自增序号保证
+     * 执行器按 index 收集时，两帧各自发起的调用不会互相覆盖。
+     */
+    private val nextToolIndex = AtomicInteger()
 
     override val protocol: ProviderProtocol = ProviderProtocol.GEMINI
 
@@ -142,7 +149,7 @@ class GeminiAdapter @Inject constructor(
             }
             part.obj("functionCall")?.let { call ->
                 toolCalls += ToolCallDelta(
-                    index = toolCalls.size,
+                    index = nextToolIndex.getAndIncrement(),
                     id = "gemini_call_${UUID.randomUUID()}",
                     nameSet = call["name"].asText(),
                     argsSet = (call["args"] ?: buildJsonObject { }).toString()
@@ -173,6 +180,9 @@ class GeminiAdapter @Inject constructor(
             inputTokens = inputTokens
         )
     }
+
+    /** 完整响应与 SSE 单帧结构一致（candidates[].content.parts），直接复用 */
+    override fun parseNonStream(body: String): StreamDelta? = parseStream(null, body)
 
     private fun UnifiedChatRequest.toGeminiContents(): List<JsonObject> {
         val contents = mutableListOf<JsonObject>()

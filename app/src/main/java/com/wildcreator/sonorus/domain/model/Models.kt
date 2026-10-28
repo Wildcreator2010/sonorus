@@ -89,6 +89,8 @@ data class ChatMessage(
     val toolName: String? = null,
     /** user 消息附带的图片；base64 不含 data: 前缀 */
     val images: List<ImageAttachment> = emptyList(),
+    /** user 消息附带的文本文件；正文只在送模型时拼进 prompt，界面显示原话 */
+    val files: List<TextAttachment> = emptyList(),
     /** 回答版本列表，映射后恒为非空；单版本时长度为 1 */
     val versions: List<AnswerVersion> = emptyList(),
     val activeVersion: Int = 0

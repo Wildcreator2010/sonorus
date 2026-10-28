@@ -60,6 +60,7 @@ data class MessageEntity(
     val role: String, // user / assistant / tool / system
     val content: String,
     val imagesJson: String? = null,    // user 消息附带图片的 JSON（[{mimeType, base64}]）
+    val filesJson: String? = null,     // user 消息附带文本文件的 JSON（[{name, mimeType, text}]）
     val toolCallsJson: String? = null, // assistant 发起工具调用时的原始 JSON
     val toolCallId: String? = null,    // role=tool 时对应的 tool_call id
     val toolName: String? = null,      // role=tool 时的工具名（便于 UI 展示）

@@ -12,14 +12,19 @@ import com.wildcreator.sonorus.domain.agent.UnifiedRole
 import com.wildcreator.sonorus.domain.model.ProviderCredentials
 import com.wildcreator.sonorus.domain.model.ProviderProtocol
 import com.wildcreator.sonorus.testJson
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -34,6 +39,7 @@ class ProviderApiClientTest {
 
     private lateinit var server: MockWebServer
     private lateinit var client: ProviderApiClient
+    private lateinit var httpClient: OkHttpClient
     private lateinit var statDao: RecordingStatDao
 
     @Before
@@ -41,8 +47,9 @@ class ProviderApiClientTest {
         server = MockWebServer()
         server.start()
         statDao = RecordingStatDao()
+        httpClient = OkHttpClient()
         client = ProviderApiClient(
-            OkHttpClient(),
+            httpClient,
             mapOf(
                 ProviderProtocol.OPENAI to OpenAiCompatAdapter(testJson),
                 ProviderProtocol.ANTHROPIC to AnthropicAdapter(testJson)
@@ -307,6 +314,138 @@ class ProviderApiClientTest {
         val stat = statDao.inserted.single()
         assertTrue("没有 finish 的流要记为失败", !stat.success)
         assertTrue("失败原因要写明疑似截断", stat.errorKind!!.contains("截断"))
+    }
+
+    @Test
+    fun 拉取模型失败时的异常文本也脱敏() = runBlocking {
+        val secret = "sk-abcdefghijklmnopqrstuvwxyz012345"
+        val throwing = OkHttpClient.Builder().addInterceptor {
+            throw IOException("connect failed: Authorization: Bearer $secret")
+        }.build()
+        val leakyClient = ProviderApiClient(
+            throwing,
+            mapOf(ProviderProtocol.OPENAI to OpenAiCompatAdapter(testJson)),
+            statDao
+        )
+
+        val error = runCatching { leakyClient.fetchModels(credentials(ProviderProtocol.OPENAI, "/v1")) }
+            .exceptionOrNull() ?: error("预期抛出异常")
+
+        assertFalse("模型拉取异常也不能带密钥给界面", error.message.orEmpty().contains(secret))
+        assertTrue(error.message.orEmpty().contains("[redacted]"))
+    }
+
+    @Test
+    fun 传输异常里的密钥不会被原样带回界面() = runBlocking {
+        val secret = "sk-abcdefghijklmnopqrstuvwxyz012345"
+        val throwing = OkHttpClient.Builder().addInterceptor {
+            throw IOException("connect failed: Authorization: Bearer $secret")
+        }.build()
+        val leakyClient = ProviderApiClient(
+            throwing,
+            mapOf(ProviderProtocol.OPENAI to OpenAiCompatAdapter(testJson)),
+            statDao
+        )
+
+        val events = withTimeout(10_000) {
+            leakyClient.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).toList()
+        }
+
+        val error = events.filterIsInstance<ProviderApiClient.StreamEvent.Error>().single()
+        assertFalse("异常文本不能带着密钥进界面", error.message.contains(secret))
+        assertTrue(error.message.contains("[redacted]"))
+    }
+
+    @Test
+    fun streamChat_取消会立即中断仍在读取的响应() = runBlocking {
+        val raw = com.wildcreator.sonorus.agent.RawSseServer()
+        val slowHttp = OkHttpClient()
+        val slowClient = ProviderApiClient(
+            slowHttp,
+            mapOf(ProviderProtocol.OPENAI to OpenAiCompatAdapter(testJson)),
+            statDao
+        )
+        val received = CompletableDeferred<Unit>()
+        val job = launch {
+            slowClient.streamChat(
+                ProviderCredentials(1L, ProviderProtocol.OPENAI, raw.baseUrl, "sk-test"),
+                chatRequest()
+            ).collect {
+                if (it is ProviderApiClient.StreamEvent.Delta) received.complete(Unit)
+            }
+        }
+        try {
+            withTimeout(3_000) { received.await() }
+            job.cancel()
+            val finished = withTimeoutOrNull(1_000) { job.join(); true } ?: false
+            assertTrue("取消不能等待下一段网络数据才释放回合", finished)
+        } finally {
+            slowHttp.dispatcher.cancelAll()
+            raw.close()
+            job.cancel()
+            job.join()
+        }
+    }
+
+    @Test
+    fun streamChat_完整JSON回答不会被当成空流() = runBlocking {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("""{"choices":[{"message":{"role":"assistant","content":"完整回答"},"finish_reason":"stop"}]}""")
+        )
+        val events = client.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).toList()
+        assertEquals("完整回答", events.filterIsInstance<ProviderApiClient.StreamEvent.Delta>().mapNotNull { it.delta.text }.joinToString(""))
+        assertTrue(statDao.inserted.single().success)
+    }
+
+    @Test
+    fun streamChat_带BOM或前导空行的完整JSON也能解析() = runBlocking {
+        for (body in listOf(
+            "\uFEFF{\"choices\":[{\"message\":{\"content\":\"BOM回答\"},\"finish_reason\":\"stop\"}]}",
+            "\n\n{\"choices\":[{\"message\":{\"content\":\"空行回答\"},\"finish_reason\":\"stop\"}]}"
+        )) {
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(body))
+            val events = client.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).toList()
+            assertTrue("非流式响应不能被当成空流：$body", events.filterIsInstance<ProviderApiClient.StreamEvent.Delta>().isNotEmpty())
+            assertTrue(events.last() is ProviderApiClient.StreamEvent.Done)
+        }
+    }
+
+    @Test
+    fun streamChat_多行SSE数据按事件拼接() = runBlocking {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"choices\": [\n" +
+                    "data: {\"delta\": {\"content\": \"多行回答\"}, \"finish_reason\": \"stop\"}]}\n\n")
+        )
+        val events = client.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).toList()
+        assertEquals("多行回答", events.filterIsInstance<ProviderApiClient.StreamEvent.Delta>().mapNotNull { it.delta.text }.joinToString(""))
+    }
+
+    @Test
+    fun streamChat_慢消费者不会丢失增量或结束事件() = runBlocking {
+        val frames = (1..180).joinToString("") {
+            "data: {\"choices\":[{\"delta\":{\"content\":\"$it,\"}}]}\n\n"
+        } + "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(frames))
+        val events = mutableListOf<ProviderApiClient.StreamEvent>()
+        client.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).collect {
+            delay(2)
+            events += it
+        }
+        assertEquals((1..180).joinToString("") { "$it," }, events.filterIsInstance<ProviderApiClient.StreamEvent.Delta>().mapNotNull { it.delta.text }.joinToString(""))
+        assertTrue(events.last() is ProviderApiClient.StreamEvent.Done)
+    }
+
+    @Test
+    fun streamChat_成功状态下的JSON错误仍显示错误原因() = runBlocking {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("""{"error":{"message":"upstream unavailable"}}""")
+        )
+        val events = client.streamChat(credentials(ProviderProtocol.OPENAI, "/v1"), chatRequest()).toList()
+        assertEquals("upstream unavailable", events.filterIsInstance<ProviderApiClient.StreamEvent.Error>().singleOrNull()?.message)
+        assertTrue(!statDao.inserted.single().success)
     }
 
     private fun credentials(protocol: ProviderProtocol, path: String) = ProviderCredentials(

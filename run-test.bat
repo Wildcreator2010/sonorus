@@ -5,4 +5,6 @@ rem 没配置时沿用外部环境里的 JAVA_HOME。
 if exist "%~dp0local.properties" for /f "usebackq tokens=1,* delims==" %%a in ("%~dp0local.properties") do if "%%a"=="jdk.home" set "JAVA_HOME=%%b"
 cd /d "%~dp0"
 call gradlew.bat testDebugUnitTest --no-build-cache > "%~dp0test-run.log" 2>&1
-echo TEST_EXIT=%ERRORLEVEL% >> "%~dp0test-run.log"
+set RC=%ERRORLEVEL%
+echo TEST_EXIT=%RC% >> "%~dp0test-run.log"
+exit /b %RC%

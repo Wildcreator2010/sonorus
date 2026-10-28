@@ -9,10 +9,12 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
+import com.wildcreator.sonorus.data.background.ChatBackgroundSettings
 
 private val LightColors = lightColorScheme()
 private val DarkColors = darkColorScheme()
@@ -30,6 +32,7 @@ private val DarkColors = darkColorScheme()
 fun SonorusTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     fontScale: FontScale = FontScale.DEFAULT,
+    chatBackground: ChatBackgroundSettings = ChatBackgroundSettings(),
     content: @Composable () -> Unit
 ) {
     val darkTheme = isSystemInDarkTheme()
@@ -47,11 +50,13 @@ fun SonorusTheme(
         darkTheme -> DarkColors
         else -> LightColors
     }
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = scaledTypography(fontScale),
-        content = content
-    )
+    CompositionLocalProvider(LocalChatBackground provides chatBackground) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = scaledTypography(fontScale),
+            content = content
+        )
+    }
 }
 
 /**

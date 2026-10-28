@@ -5,6 +5,7 @@ import com.wildcreator.sonorus.domain.model.ChatRole
 import com.wildcreator.sonorus.domain.model.Conversation
 import com.wildcreator.sonorus.domain.model.ConversationExporter
 import com.wildcreator.sonorus.domain.model.ImageAttachment
+import com.wildcreator.sonorus.domain.model.TextAttachment
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -78,6 +79,40 @@ class ConversationExporterTest {
         // 原 base64 是 "AAAA" 重复 64 次；导出里不应出现连续 100 字符以上的 base64
         val longRun = Regex("A{100,}").find(md)
         assertTrue("不得把图片 base64 写进 Markdown", longRun == null)
+    }
+
+    @Test
+    fun 文本附件在导出里只保留元数据() {
+        val withFile = ChatMessage(
+            id = 5, conversationId = 42, role = ChatRole.USER, content = "看文件",
+            files = listOf(TextAttachment("a.md", "text/markdown", "# 标题\n正文"))
+        )
+        val md = ConversationExporter.toMarkdown(conversation, listOf(withFile))
+        assertTrue("Markdown 要标出附件名", md.contains("a.md"))
+        assertFalse("附件正文不塞进 Markdown", md.contains("# 标题"))
+
+        val json = ConversationExporter.toJson(conversation, listOf(withFile))
+        val root = Json.parseToJsonElement(json).jsonObject
+        val message = (root["messages"] as JsonArray)[0].jsonObject
+        val file = (message["files"] as JsonArray)[0].jsonObject
+        assertEquals("a.md", file["name"]?.jsonPrimitive?.content)
+        assertEquals(7, file["chars"]?.jsonPrimitive?.int)
+        assertFalse("附件正文不塞进 JSON", json.contains("正文"))
+    }
+
+    @Test
+    fun json与markdown都过滤空assistant占位行() {
+        val placeholder = ChatMessage(
+            id = 5, conversationId = 42, role = ChatRole.ASSISTANT, content = ""
+        )
+        val withPlaceholder = messages + placeholder
+
+        val md = ConversationExporter.toMarkdown(conversation, withPlaceholder)
+        assertTrue("Markdown 的消息数不能把工具占位行算进去", md.contains("消息数：4"))
+
+        val json = ConversationExporter.toJson(conversation, withPlaceholder)
+        val arr = Json.parseToJsonElement(json).jsonObject["messages"] as JsonArray
+        assertEquals("JSON 不能把空 assistant 占位行导出成一条空消息", 4, arr.size)
     }
 
     @Test

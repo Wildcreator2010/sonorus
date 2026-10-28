@@ -35,9 +35,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             val themeMode by rootViewModel.themeMode.collectAsState()
             val fontScale by rootViewModel.fontScale.collectAsState()
+            val chatBackground by rootViewModel.chatBackground.collectAsState()
             SonorusTheme(
                 themeMode = themeMode,
-                fontScale = fontScale
+                fontScale = fontScale,
+                chatBackground = chatBackground
             ) {
                 AppUpdateHost(viewModel = updateViewModel) {
                     ChangelogHost(viewModel = changelogViewModel) {

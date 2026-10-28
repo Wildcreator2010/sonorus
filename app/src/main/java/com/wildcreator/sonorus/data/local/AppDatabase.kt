@@ -13,7 +13,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MessageEntity::class,
         RequestStatEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -112,6 +112,14 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE conversations ADD COLUMN contextSummary TEXT")
                 db.execSQL("ALTER TABLE conversations ADD COLUMN summaryThroughMessageId INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        const val MIGRATION_7_8_SQL = "ALTER TABLE messages ADD COLUMN filesJson TEXT"
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(MIGRATION_7_8_SQL)
             }
         }
 

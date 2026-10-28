@@ -157,6 +157,17 @@ class BackupSchemaTest {
     }
 
     @Test
+    fun 文本附件备份往返不丢失() {
+        val raw = """{"schema":"sonorus.backup/v1","conversations":[{"title":"文件","providerName":"测试","providerBaseUrl":"https://example.com/v1","modelId":"model","systemPrompt":"","createdAt":1,"updatedAt":1,"messages":[{"role":"user","content":"读取附件","filesJson":"[{\"name\":\"note.txt\",\"text\":\"附件内容\"}]","createdAt":1}]}]}"""
+        val encoded = BackupSchema.encode(BackupSchema.decode(raw))
+        val root = kotlinx.serialization.json.Json.parseToJsonElement(encoded) as kotlinx.serialization.json.JsonObject
+        val conversations = root["conversations"] as kotlinx.serialization.json.JsonArray
+        val messages = (conversations[0] as kotlinx.serialization.json.JsonObject)["messages"] as kotlinx.serialization.json.JsonArray
+        val files = (messages[0] as kotlinx.serialization.json.JsonObject)["filesJson"] as? kotlinx.serialization.json.JsonPrimitive
+        assertEquals("""[{"name":"note.txt","text":"附件内容"}]""", files?.content)
+    }
+
+    @Test
     fun 非JSON内容报非法容器而不是解析崩溃() {
         try {
             BackupSchema.decode("这不是 json")

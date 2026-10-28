@@ -1,5 +1,10 @@
 package com.wildcreator.sonorus.domain.agent
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+
 /**
  * Agent 工具循环刹车：识别"模型在原地打转"的调用模式并叫停本轮。
  *
@@ -66,9 +71,14 @@ class ToolCallGuard(
      * `failed` 取自 [ToolResult.ok] —— 不能靠错误文案猜，也不能只看有没有抛异常。
      */
     fun recordResult(canonicalName: String, failed: Boolean): Verdict {
-        if (!failed) return Verdict.Allow
-        val failures = (failureCounts[canonicalName.lowercase()] ?: 0) + 1
-        failureCounts[canonicalName.lowercase()] = failures
+        val key = canonicalName.lowercase()
+        if (!failed) {
+            // 这里是"连续失败"：中间成功一次就重新计数，不是整个回合的累计
+            failureCounts.remove(key)
+            return Verdict.Allow
+        }
+        val failures = (failureCounts[key] ?: 0) + 1
+        failureCounts[key] = failures
         return if (failures > maxFailuresPerTool) {
             Verdict.Stop("$canonicalName 连续执行失败 $failures 次，已放弃本轮")
         } else {
@@ -77,8 +87,21 @@ class ToolCallGuard(
     }
 
     /** 参数里的空白与字段顺序不影响"是不是同一个调用"的判断 */
-    private fun normalizeArguments(raw: String): String =
-        raw.trim().replace(WHITESPACE, "")
+    private fun normalizeArguments(raw: String): String {
+        val element = runCatching { Json.parseToJsonElement(raw) }.getOrNull()
+            ?: return raw.trim().replace(WHITESPACE, "")
+        return canonical(element).toString()
+    }
+
+    /** 递归按 key 排序；数组顺序保留（对调用参数来说顺序有意义） */
+    private fun canonical(element: JsonElement): JsonElement = when (element) {
+        is JsonObject -> JsonObject(
+            element.entries.sortedBy { it.key }
+                .associate { (key, value) -> key to canonical(value) }
+        )
+        is JsonArray -> JsonArray(element.map(::canonical))
+        else -> element
+    }
 
     private companion object {
         val WHITESPACE = Regex("\\s+")

@@ -76,6 +76,7 @@ data class BackupMessage(
     val role: String,
     val content: String,
     val imagesJson: String? = null,
+    val filesJson: String? = null,
     val toolCallsJson: String? = null,
     val toolCallId: String? = null,
     val toolName: String? = null,

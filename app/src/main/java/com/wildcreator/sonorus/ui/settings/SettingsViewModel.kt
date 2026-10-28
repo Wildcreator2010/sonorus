@@ -1,8 +1,12 @@
 package com.wildcreator.sonorus.ui.settings
 
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.wildcreator.sonorus.data.backup.BackupManager
+import com.wildcreator.sonorus.data.background.BackgroundImageException
+import com.wildcreator.sonorus.data.background.ChatBackgroundSettings
+import com.wildcreator.sonorus.data.background.ChatBackgroundStore
 import com.wildcreator.sonorus.data.local.RequestSummary
 import com.wildcreator.sonorus.data.prefs.CONTEXT_LIMIT_UNLIMITED
 import com.wildcreator.sonorus.data.prefs.DEFAULT_SYSTEM_PROMPT
@@ -14,6 +18,7 @@ import com.wildcreator.sonorus.domain.repository.StatsRepository
 import com.wildcreator.sonorus.ui.theme.FontScale
 import com.wildcreator.sonorus.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -54,7 +59,8 @@ class SettingsViewModel @Inject constructor(
     private val settings: SettingsManager,
     private val providerRepository: ProviderRepository,
     private val statsRepository: StatsRepository,
-    private val backup: BackupManager
+    private val backup: BackupManager,
+    private val backgroundStore: ChatBackgroundStore
 ) : ViewModel() {
 
     val contextLimit: StateFlow<Int> = settings.contextLimit
@@ -75,6 +81,39 @@ class SettingsViewModel @Inject constructor(
 
     val fontScale: StateFlow<FontScale> = settings.fontScale
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FontScale.DEFAULT)
+
+    val chatBackground = settings.chatBackground
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ChatBackgroundSettings())
+    private val _backgroundBusy = MutableStateFlow(false)
+    val backgroundBusy = _backgroundBusy.asStateFlow()
+
+    fun importChatBackground(uri: Uri, onResult: (String?) -> Unit) =
+        changeBackground(onResult) { backgroundStore.importImage(uri) }
+
+    fun saveChatBackgroundOpacity(opacity: Float, onResult: (String?) -> Unit) =
+        changeBackground(onResult) { backgroundStore.saveOpacity(opacity) }
+
+    fun resetChatBackground(onResult: (String?) -> Unit) =
+        changeBackground(onResult) { backgroundStore.restoreDefault() }
+
+    private fun changeBackground(onResult: (String?) -> Unit, action: suspend () -> Unit) {
+        if (_backgroundBusy.value) return
+        _backgroundBusy.value = true
+        viewModelScope.launch {
+            val error = try {
+                action()
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e is BackgroundImageException) e.message
+                else "背景设置失败，请检查图片是否可读及存储空间后重试"
+            } finally {
+                _backgroundBusy.value = false
+            }
+            onResult(error)
+        }
+    }
 
     private val _globalStats = MutableStateFlow<RequestSummary?>(null)
     val globalStats: StateFlow<RequestSummary?> = _globalStats.asStateFlow()

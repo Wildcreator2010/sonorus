@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -186,6 +187,20 @@ class GeminiAdapterTest {
         assertTrue(call.id!!.startsWith("gemini_call_"))
         // Gemini 没有 tool_use 停止原因，靠本帧是否含 functionCall 判定
         assertEquals(FinishReason.TOOL_CALLS, delta.finish)
+    }
+
+    @Test
+    fun parseStream_跨帧函数调用序号不冲突() {
+        val first = adapter.parseStream(
+            null,
+            """{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_time","args":{"n":1}}}]}}]}"""
+        )!!.toolCalls!!.single().index
+        val second = adapter.parseStream(
+            null,
+            """{"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_time","args":{"n":2}}}]}}]}"""
+        )!!.toolCalls!!.single().index
+
+        assertNotEquals("不同帧的函数调用不能都落在 0，否则执行器里后一个会覆盖前一个", first, second)
     }
 
     @Test

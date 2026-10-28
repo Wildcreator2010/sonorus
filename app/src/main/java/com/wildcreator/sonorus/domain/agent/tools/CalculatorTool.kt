@@ -84,28 +84,31 @@ class CalculatorTool : AgentTool {
         }
 
         private fun parseTerm(): Double {
-            var v = parseFactor()
+            var v = parseUnary()
             while (true) {
                 skipWs()
                 v = when {
-                    match('*') -> v * parseFactor()
-                    match('/') -> v / parseFactor()
-                    match('%') -> v % parseFactor()
+                    match('*') -> v * parseUnary()
+                    match('/') -> v / parseUnary()
+                    match('%') -> v % parseUnary()
                     else -> return v
                 }
             }
         }
 
-        private fun parseFactor(): Double {
-            skipWs()
-            val base = parseUnary()
-            skipWs()
-            return if (match('^')) base.pow(parseFactor()) else base // 右结合
-        }
-
+        /**
+         * 负号优先级低于乘方：-2^2 = -(2^2)，不是 (-2)^2。
+         * 乘方右结合，并允许指数带负号（2^-3）。
+         */
         private fun parseUnary(): Double {
             skipWs()
-            return if (match('-')) -parseUnary() else parsePrimary()
+            return if (match('-')) -parseUnary() else parsePower()
+        }
+
+        private fun parsePower(): Double {
+            val base = parsePrimary()
+            skipWs()
+            return if (match('^')) base.pow(parseUnary()) else base
         }
 
         private fun parsePrimary(): Double {
@@ -117,9 +120,7 @@ class CalculatorTool : AgentTool {
                 return v
             }
             if (pos < s.length && (s[pos].isDigit() || s[pos] == '.')) {
-                val start = pos
-                while (pos < s.length && (s[pos].isDigit() || s[pos] == '.')) pos++
-                return s.substring(start, pos).toDouble()
+                return parseNumber()
             }
             if (pos < s.length && s[pos].isLetter()) {
                 val start = pos
@@ -150,6 +151,40 @@ class CalculatorTool : AgentTool {
                 }
             }
             throw IllegalArgumentException("第 ${pos + 1} 个字符处语法错误")
+        }
+
+        /**
+         * 数字字面量：整数/小数 + 可选科学计数法。
+         * 只允许一个小数点、指数必须有数字，避免 "1.2.3"、"1e" 被静默截断。
+         */
+        private fun parseNumber(): Double {
+            val start = pos
+            var digits = 0
+            while (pos < s.length && s[pos].isDigit()) {
+                pos++
+                digits++
+            }
+            if (pos < s.length && s[pos] == '.') {
+                pos++
+                while (pos < s.length && s[pos].isDigit()) {
+                    pos++
+                    digits++
+                }
+            }
+            if (digits == 0) throw IllegalArgumentException("第 ${start + 1} 个字符处缺少数字")
+
+            if (pos < s.length && (s[pos] == 'e' || s[pos] == 'E')) {
+                val exponentStart = pos
+                pos++
+                if (pos < s.length && (s[pos] == '+' || s[pos] == '-')) pos++
+                val exponentDigits = pos
+                while (pos < s.length && s[pos].isDigit()) pos++
+                if (pos == exponentDigits) {
+                    pos = exponentStart
+                    throw IllegalArgumentException("科学计数法缺少指数")
+                }
+            }
+            return s.substring(start, pos).toDouble()
         }
 
         private fun match(c: Char): Boolean {

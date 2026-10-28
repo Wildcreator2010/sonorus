@@ -153,6 +153,38 @@ class AnthropicAdapter @Inject constructor(
         }
     }
 
+    /** 完整（非流式）响应：content 是 blocks 数组，与 SSE 的事件形态完全不同 */
+    override fun parseNonStream(body: String): StreamDelta? {
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+        root.obj("error")?.let {
+            return StreamDelta(error = it.get("message").asText() ?: "Anthropic 返回错误")
+        }
+        val blocks = root.arr("content") ?: return null
+        val text = blocks.mapNotNull { block ->
+            val obj = block.asObject() ?: return@mapNotNull null
+            if (obj["type"].asText() == "text") obj["text"].asText() else null
+        }.joinToString("").takeIf { it.isNotEmpty() }
+        val toolCalls = blocks.mapIndexedNotNull { index, block ->
+            val obj = block.asObject() ?: return@mapIndexedNotNull null
+            if (obj["type"].asText() != "tool_use") return@mapIndexedNotNull null
+            ToolCallDelta(
+                index = index,
+                id = obj["id"].asText(),
+                nameSet = obj["name"].asText(),
+                argsSet = obj["input"]?.toString() ?: "{}"
+            )
+        }.takeIf { it.isNotEmpty() }
+        val finish = when (root["stop_reason"].asText()) {
+            "tool_use" -> FinishReason.TOOL_CALLS
+            "max_tokens" -> FinishReason.LENGTH
+            "refusal" -> FinishReason.BLOCKED
+            null -> null
+            else -> FinishReason.STOP
+        }
+        return if (text == null && toolCalls == null && finish == null) null
+        else StreamDelta(text = text, toolCalls = toolCalls, finish = finish)
+    }
+
     /**
      * 统一消息 -> Anthropic messages：
      * 连续的 tool 结果必须合并进同一条 user 消息（Anthropic 强制要求）。
@@ -215,10 +247,13 @@ class AnthropicAdapter @Inject constructor(
                                     }
                                 })
                             }
-                            add(buildJsonObject {
-                                put("type", "text")
-                                put("text", message.text ?: "")
-                            })
+                            // 空 text block 会被 Anthropic 拒绝；纯图片消息只留 image block
+                            message.text?.takeIf { it.isNotBlank() }?.let {
+                                add(buildJsonObject {
+                                    put("type", "text")
+                                    put("text", it)
+                                })
+                            }
                         }
                     }
                     index++

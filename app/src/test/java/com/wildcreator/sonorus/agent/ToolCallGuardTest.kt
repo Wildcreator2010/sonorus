@@ -89,6 +89,28 @@ class ToolCallGuardTest {
     }
 
     @Test
+    fun 中间成功一次后连续失败计数清零() {
+        val guard = ToolCallGuard()
+        guard.recordResult(CANONICAL, failed = true)
+        guard.recordResult(CANONICAL, failed = true)
+        guard.recordResult(CANONICAL, failed = false)
+
+        assertTrue("成功一次后应重新计算连续失败，而不是累计", !stopped(guard.recordResult(CANONICAL, failed = true)))
+
+        guard.recordResult(CANONICAL, failed = true)
+        assertTrue("重新累计到第三次才叫停", stopped(guard.recordResult(CANONICAL, failed = true)))
+    }
+
+    @Test
+    fun 参数字段顺序不同仍算同一个调用() {
+        val guard = ToolCallGuard()
+        guard.register(call(1, args = """{"a":1,"b":2}"""), CANONICAL)
+        guard.register(call(2, args = """{"b":2,"a":1}"""), CANONICAL)
+
+        assertTrue("字段顺序不应绕过重复调用刹车", stopped(guard.register(call(3, args = """{"a":1,"b":2}"""), CANONICAL)))
+    }
+
+    @Test
     fun 终止原因包含工具名便于排查() {
         val guard = ToolCallGuard()
         guard.register(call(1), CANONICAL)

@@ -98,6 +98,25 @@ interface ChatDao {
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteConversation(id: Long)
 
+    /**
+     * 删会话必须连消息一起、且在同一次事务里完成。
+     * 分两步会在中间留下"会话还在、消息已空"的窗口：正在取消的回合恰好此时落库，
+     * 就变成挂在已消失会话上的孤儿消息。
+     */
+    @Transaction
+    suspend fun deleteConversationWithMessages(id: Long) {
+        deleteMessagesFor(id)
+        deleteConversation(id)
+    }
+
+    /** 落库前在同一个事务里确认会话仍在，避免回合收尾与删会话并发时写回孤儿消息 */
+    @Transaction
+    suspend fun insertMessageIfConversationExists(message: MessageEntity): Boolean {
+        if (getConversation(message.conversationId) == null) return false
+        insertMessage(message)
+        return true
+    }
+
     /** 某提供商名下的会话数：删除提供商前用它向用户说清会连带丢多少 */
     @Query("SELECT COUNT(*) FROM conversations WHERE providerId = :providerId")
     suspend fun countConversationsForProvider(providerId: Long): Int

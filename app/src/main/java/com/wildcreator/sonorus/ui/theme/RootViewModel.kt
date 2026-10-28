@@ -2,6 +2,7 @@ package com.wildcreator.sonorus.ui.theme
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.wildcreator.sonorus.data.background.ChatBackgroundSettings
 import com.wildcreator.sonorus.data.prefs.SettingsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,4 +24,6 @@ class RootViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ThemeMode.SYSTEM)
     val fontScale = settings.fontScale
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FontScale.DEFAULT)
+    val chatBackground = settings.chatBackground
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ChatBackgroundSettings())
 }

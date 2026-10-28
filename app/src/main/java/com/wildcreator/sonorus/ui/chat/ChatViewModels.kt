@@ -13,6 +13,7 @@ import com.wildcreator.sonorus.domain.model.ChatRole
 import com.wildcreator.sonorus.domain.model.Conversation
 import com.wildcreator.sonorus.domain.model.ConversationExporter
 import com.wildcreator.sonorus.domain.model.ImageAttachment
+import com.wildcreator.sonorus.domain.model.TextAttachment
 import com.wildcreator.sonorus.domain.repository.ChatRepository
 import com.wildcreator.sonorus.domain.repository.ProviderRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -153,18 +154,19 @@ class ChatViewModel @Inject constructor(
     fun send(
         text: String,
         images: List<ImageAttachment> = emptyList(),
+        files: List<TextAttachment> = emptyList(),
         replaceTailFromMessageId: Long? = null
     ) {
         val trimmed = text.trim()
-        // 纯图片（无文字）也允许发送
-        if ((trimmed.isEmpty() && images.isEmpty()) || agentExecutor.state.value.running) return
+        // 纯图片 / 纯附件（无文字）也允许发送
+        if ((trimmed.isEmpty() && images.isEmpty() && files.isEmpty()) || agentExecutor.state.value.running) return
         runScope.launch {
             val isAutoTitle = chatRepository.getConversation(conversationId)?.titleAuto == true
             try {
                 if (replaceTailFromMessageId != null) {
-                    agentExecutor.editAndResend(conversationId, replaceTailFromMessageId, trimmed, images)
+                    agentExecutor.editAndResend(conversationId, replaceTailFromMessageId, trimmed, images, files)
                 } else {
-                    agentExecutor.send(conversationId, trimmed, images)
+                    agentExecutor.send(conversationId, trimmed, images, files)
                 }
             } catch (e: CancellationException) {
                 // 用户点了停止：内容已在执行器里落库，标题生成就别做了
@@ -280,7 +282,7 @@ class ChatViewModel @Inject constructor(
             if (target.role != ChatRole.USER) return@launch
             // 删尾与插新交给执行器在同一次事务里完成：分两步会留下"会话零消息"的空窗，
             // 用户退回列表页的那一瞬间整条会话会被空会话清理删掉
-            send(trimmed, target.images, replaceTailFromMessageId = messageId)
+            send(trimmed, target.images, target.files, replaceTailFromMessageId = messageId)
         }
     }
 

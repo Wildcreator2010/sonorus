@@ -2,6 +2,8 @@ package com.wildcreator.sonorus.ui.chat
 
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -38,6 +40,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -106,7 +109,11 @@ import com.wildcreator.sonorus.domain.model.ChatMessage
 import com.wildcreator.sonorus.domain.model.ChatRole
 import com.wildcreator.sonorus.domain.model.Conversation
 import com.wildcreator.sonorus.domain.model.ImageAttachment
+import com.wildcreator.sonorus.domain.model.TextAttachment
+import com.wildcreator.sonorus.domain.model.TextAttachmentException
+import com.wildcreator.sonorus.domain.model.TextAttachmentParser
 import com.wildcreator.sonorus.ui.donate.DonateDialog
+import com.wildcreator.sonorus.ui.theme.ChatBackground
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -378,7 +385,7 @@ private fun RenameDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     onBack: () -> Unit,
@@ -396,6 +403,7 @@ fun ChatScreen(
     var input by remember { mutableStateOf("") }
     // 用普通 List 存在 State 里：MutableStateList 与 Compose 快照配合时有较复杂的推断问题
     var pendingImages by remember { mutableStateOf<List<ImageAttachment>>(emptyList()) }
+    var pendingFiles by remember { mutableStateOf<List<TextAttachment>>(emptyList()) }
     var showSystemPromptDialog by remember { mutableStateOf(false) }
     var showTuningDialog by remember { mutableStateOf(false) }
     var showClearDialog by remember { mutableStateOf(false) }
@@ -403,8 +411,10 @@ fun ChatScreen(
     // 编辑重发 / 批注修订的目标消息；null = 无弹窗
     var editingMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var annotatingMessage by remember { mutableStateOf<ChatMessage?>(null) }
-    // 上次发送的文本：失败后留在输入框，避免用户重打
+    // 上次发送的内容：失败后重试要连图片和附件一起重发，不能只补文字
     var lastSent by remember { mutableStateOf("") }
+    var lastImages by remember { mutableStateOf<List<ImageAttachment>>(emptyList()) }
+    var lastFiles by remember { mutableStateOf<List<TextAttachment>>(emptyList()) }
     // 只有最后一条最终回答能重新生成 / 批注修改（tool 承载行正文为空，天然被排除）
     val lastAnswerId = remember(messages) {
         messages.lastOrNull { it.role == ChatRole.ASSISTANT && it.content.isNotBlank() }?.id
@@ -431,6 +441,35 @@ fun ChatScreen(
                     uris.take(remaining).mapNotNull { uri -> context.readImageAttachment(uri) }
                 }
                 pendingImages = pendingImages + decoded
+            }
+        }
+    }
+
+    val pickFiles = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            val remaining = TextAttachmentParser.MAX_FILE_COUNT - pendingFiles.size
+            if (remaining <= 0) {
+                scope.launch { snackbar.showSnackbar("最多附带 ${TextAttachmentParser.MAX_FILE_COUNT} 个文本文件") }
+                return@rememberLauncherForActivityResult
+            }
+            scope.launch {
+                val results = withContext(Dispatchers.IO) {
+                    uris.take(remaining).map { uri -> runCatching { context.readTextAttachment(uri) } }
+                }
+                val decoded = results.mapNotNull { it.getOrNull() }
+                val error = results.firstNotNullOfOrNull { it.exceptionOrNull()?.message }
+                val totalChars = pendingFiles.sumOf { it.text.length } + decoded.sumOf { it.text.length }
+                when {
+                    decoded.isEmpty() -> snackbar.showSnackbar(error ?: "无法读取所选文件")
+                    totalChars > TextAttachmentParser.MAX_TOTAL_CHARS ->
+                        snackbar.showSnackbar("附件总内容过长（上限约 ${TextAttachmentParser.MAX_TOTAL_CHARS / 1024} KB），请减少文件")
+                    else -> {
+                        pendingFiles = pendingFiles + decoded
+                        if (error != null) snackbar.showSnackbar(error)
+                    }
+                }
             }
         }
     }
@@ -600,12 +639,16 @@ fun ChatScreen(
         },
         snackbarHost = { SnackbarHost(snackbar) }
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .imePadding()
         ) {
+            ChatBackground(onError = { message ->
+                scope.launch { snackbar.showSnackbar(message) }
+            })
+            Column(modifier = Modifier.fillMaxSize()) {
             // 消息区：右上角浮一对"回到开头 / 回到结尾"按钮，所以外面要包一层 Box
             Box(modifier = Modifier.weight(1f)) {
                 LazyColumn(
@@ -667,7 +710,9 @@ fun ChatScreen(
                                             enabled = !runningElsewhere,
                                             onClick = {
                                                 viewModel.dismissError()
-                                                if (lastSent.isNotBlank()) viewModel.send(lastSent)
+                                                if (lastSent.isNotBlank() || lastImages.isNotEmpty() || lastFiles.isNotEmpty()) {
+                                                    viewModel.send(lastSent, lastImages, lastFiles)
+                                                }
                                             }
                                         ) { Text("重试") }
                                         TextButton(onClick = { viewModel.dismissError() }) { Text("忽略") }
@@ -687,6 +732,20 @@ fun ChatScreen(
             // 上下文状态条：让"这次到底送了多少"可见，避免用户误以为模型失忆是 bug
             if (agentState.totalMessages > 0) {
                 ContextStatusBar(agentState)
+            }
+
+            // 待发送文本附件预览
+            if (pendingFiles.isNotEmpty()) {
+                FlowRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    pendingFiles.forEach { file ->
+                        TextFileChip(file, onRemove = { pendingFiles = pendingFiles - file })
+                    }
+                }
             }
 
             // 待发送图片预览
@@ -734,12 +793,25 @@ fun ChatScreen(
                 )
             }
 
+            // 背景图可能很花，输入区垫一层近不透明的底色，保证输入框和提示文字可读
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                IconButton(
+                    onClick = {
+                        runCatching { pickFiles.launch(arrayOf("*/*")) }.onFailure {
+                            scope.launch { snackbar.showSnackbar("系统文件选择器不可用") }
+                        }
+                    },
+                    enabled = pendingFiles.size < TextAttachmentParser.MAX_FILE_COUNT &&
+                        !agentState.running && !runningElsewhere
+                ) {
+                    Icon(Icons.Default.AttachFile, contentDescription = "添加文本文件")
+                }
                 IconButton(
                     onClick = {
                         pickImages.launch(
@@ -766,15 +838,21 @@ fun ChatScreen(
                     IconButton(
                         onClick = {
                             lastSent = input
-                            viewModel.send(input, pendingImages)
+                            lastImages = pendingImages
+                            lastFiles = pendingFiles
+                            viewModel.send(input, pendingImages, pendingFiles)
                             input = ""
                             pendingImages = emptyList()
+                            pendingFiles = emptyList()
                         },
-                        enabled = (input.isNotBlank() || pendingImages.isNotEmpty()) && !runningElsewhere
+                        enabled = (input.isNotBlank() || pendingImages.isNotEmpty() || pendingFiles.isNotEmpty()) &&
+                            !runningElsewhere
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
                     }
                 }
+            }
+            }
             }
         }
     }
@@ -822,6 +900,7 @@ fun ChatScreen(
         EditResendDialog(
             initial = target.content,
             hasImages = target.images.isNotEmpty(),
+            hasFiles = target.files.isNotEmpty(),
             onConfirm = { text ->
                 lastSent = text
                 viewModel.editAndResend(target.id, text)
@@ -1022,6 +1101,9 @@ private fun MessageBubble(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        message.files.forEach { file ->
+                            TextFileChip(file, modifier = Modifier.fillMaxWidth())
+                        }
                         message.images.forEach { attachment ->
                             AttachmentImage(
                                 attachment = attachment,
@@ -1255,6 +1337,7 @@ private fun rememberElapsedSeconds(active: Boolean, startedAt: Long): Int {
 private fun EditResendDialog(
     initial: String,
     hasImages: Boolean,
+    hasFiles: Boolean,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1269,9 +1352,9 @@ private fun EditResendDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (hasImages) {
+                if (hasImages || hasFiles) {
                     Text(
-                        "原消息里的图片会一并重发。",
+                        "原消息里的图片和文本附件会一并重发。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -1400,6 +1483,90 @@ private suspend fun android.content.Context.shareExportFile(bundle: ExportBundle
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         )
     }.isSuccess
+}
+
+// ---------- 文本附件辅助 ----------
+
+/**
+ * 读取所选文件的文本。最多读到上限再多 1 字节就停 ——
+ * 解析器据此报"过大"，而不是把几百 MB 的文件整个读进内存。
+ */
+private fun android.content.Context.readTextAttachment(uri: Uri): TextAttachment {
+    val name = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    val bytes = contentResolver.openInputStream(uri)?.use { input ->
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0
+        while (true) {
+            val count = input.read(buffer)
+            if (count == -1) break
+            total += count
+            // 超限必须显式失败：截断后正好等于上限会被解析器当成完整文件
+            if (total > TextAttachmentParser.MAX_FILE_BYTES) {
+                throw TextAttachmentException("文件过大：单个文本附件不能超过 ${TextAttachmentParser.MAX_FILE_BYTES / 1024} KB")
+            }
+            out.write(buffer, 0, count)
+        }
+        out.toByteArray()
+    } ?: throw TextAttachmentException("无法读取所选文件")
+    return TextAttachmentParser.parse(name, contentResolver.getType(uri), bytes)
+}
+
+/** 文本附件的小卡片：图标 + 文件名 + 字数；待发送时可移除 */
+@Composable
+private fun TextFileChip(
+    file: TextAttachment,
+    modifier: Modifier = Modifier,
+    onRemove: (() -> Unit)? = null
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                start = 8.dp,
+                top = 4.dp,
+                bottom = 4.dp,
+                end = if (onRemove != null) 4.dp else 8.dp
+            ),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.AttachFile,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Column(
+                modifier = Modifier
+                    .padding(start = 6.dp)
+                    .widthIn(max = 220.dp)
+            ) {
+                Text(
+                    file.name,
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${file.text.length} 字",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (onRemove != null) {
+                IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "移除附件",
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 
 // ---------- 图片辅助 ----------

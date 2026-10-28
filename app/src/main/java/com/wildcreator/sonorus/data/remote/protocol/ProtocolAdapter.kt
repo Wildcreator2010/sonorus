@@ -34,4 +34,7 @@ interface ProtocolAdapter {
      * @return null 表示该行无需处理（心跳、未知事件、非 JSON）
      */
     fun parseStream(event: String?, data: String): StreamDelta?
+
+    /** 网关忽略 stream=true、直接返回完整 JSON 时的兜底解析；null = 该协议不支持 */
+    fun parseNonStream(body: String): StreamDelta? = null
 }

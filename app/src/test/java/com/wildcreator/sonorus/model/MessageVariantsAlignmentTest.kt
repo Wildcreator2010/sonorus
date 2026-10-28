@@ -61,6 +61,19 @@ class MessageVariantsAlignmentTest {
     }
 
     @Test
+    fun 多版本JSON里的创建时间原样保留() {
+        val versions = listOf(
+            AnswerVersion(content = "旧版", createdAt = 111L),
+            AnswerVersion(content = "新版", reasoning = "想法", createdAt = 222L)
+        )
+
+        val decoded = MessageVariants.decode(MessageVariants.encode(versions)!!, AnswerVersion("兜底", createdAt = 0L))
+
+        assertEquals(111L, decoded[0].createdAt)
+        assertEquals(222L, decoded[1].createdAt)
+    }
+
+    @Test
     fun 单版本无推理无批注时不落JSON带了推理就必须落() {
         // 与旧数据形态一致以省空间；但推理/批注只存在于 versionsJson 里，省掉就等于丢信息
         val plain = listOf(AnswerVersion(content = "答案", createdAt = 1L))

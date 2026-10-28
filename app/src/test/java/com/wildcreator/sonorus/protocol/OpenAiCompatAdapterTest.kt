@@ -216,6 +216,44 @@ class OpenAiCompatAdapterTest {
     }
 
     @Test
+    fun parseStream_完整message内容可读取() {
+        val delta = adapter.parseStream(null, """{"choices":[{"message":{"role":"assistant","content":"完整回答"},"finish_reason":"stop"}]}""")!!
+        assertEquals("完整回答", delta.text)
+        assertEquals(FinishReason.STOP, delta.finish)
+    }
+
+    @Test
+    fun parseStream_文本块数组只提取正文() {
+        val delta = adapter.parseStream(null, """{"choices":[{"delta":{"content":[{"type":"text","text":"你"},{"type":"thinking","thinking":"不要显示"},{"type":"text","text":"好"}]}}]}""")
+        assertEquals("你好", delta?.text)
+    }
+
+    @Test
+    fun parseStream_兼容completions的text字段() {
+        val delta = adapter.parseStream(null, """{"choices":[{"text":"补全回答","finish_reason":"stop"}]}""")!!
+        assertEquals("补全回答", delta.text)
+        assertEquals(FinishReason.STOP, delta.finish)
+    }
+
+    @Test
+    fun parseNonStream_工具调用能被执行() {
+        val delta = adapter.parseNonStream(
+            """{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_time","arguments":"{\"tz\":\"UTC\"}"}}]},"finish_reason":"tool_calls"}]}"""
+        )!!
+        assertEquals(FinishReason.TOOL_CALLS, delta.finish)
+        val call = delta.toolCalls!!.single()
+        assertEquals("call_1", call.id)
+        assertEquals("get_time", call.nameSet)
+        assertEquals("""{"tz":"UTC"}""", call.argsSet)
+    }
+
+    @Test
+    fun parseStream_拒绝原因不是空回答() {
+        val delta = adapter.parseStream(null, """{"choices":[{"delta":{"content":null,"refusal":"无法协助此请求"},"finish_reason":"stop"}]}""")!!
+        assertEquals("无法协助此请求", delta.text)
+    }
+
+    @Test
     fun 协议标识为OPENAI() {
         assertEquals(ProviderProtocol.OPENAI, adapter.protocol)
     }

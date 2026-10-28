@@ -43,6 +43,19 @@ internal fun JsonObject.arr(key: String): JsonArray? = this[key].asArray()
 
 internal fun JsonElement.asPrimitiveText(): String? = jsonPrimitive.contentOrNull
 
+/**
+ * 正文兼容取值：字符串，或 [{type:"text",text:"..."}] 形式的内容块数组。
+ * 部分网关（OpenRouter、xAI 代理）无论流式与否都可能发数组；未知块（思考/签名）一律跳过。
+ */
+internal fun JsonElement?.asContentText(): String? = when (this) {
+    is JsonPrimitive -> contentOrNull
+    is JsonArray -> mapNotNull { element ->
+        val obj = element as? JsonObject ?: return@mapNotNull null
+        if (obj.text("type") == null || obj.text("type") == "text") obj.text("text") else null
+    }.joinToString("").takeIf { it.isNotEmpty() }
+    else -> null
+}
+
 // ---------- 思考等级 -> 各家参数映射 ----------
 
 /** OpenAI 系：reasoning_effort。OFF 返回 null 表示不下发 */

@@ -54,6 +54,14 @@ object ConversationExporter {
                         .append("，base64 ").append(img.base64.length).append(" 字符）\n")
                 }
             }
+            if (m.files.isNotEmpty()) {
+                sb.append('\n')
+                m.files.forEachIndexed { index, file ->
+                    sb.append("> 📄 附件 ").append(index + 1)
+                        .append("（").append(file.name)
+                        .append("，").append(file.text.length).append(" 字）\n")
+                }
+            }
             val reasoning = m.reasoning?.takeIf { it.isNotBlank() }
             if (reasoning != null) {
                 sb.append('\n').append("🧠 思考过程\n\n")
@@ -82,6 +90,9 @@ object ConversationExporter {
     }
 
     fun toJson(conversation: Conversation, messages: List<ChatMessage>): String {
+        // 与 Markdown 共用同一条过滤规则：工具调用的 assistant 占位行没有正文，
+        // 导出去只会多一条空消息，还会让两种格式的"消息数"对不上
+        val rendered = messages.filterNot { it.role == ChatRole.ASSISTANT && it.content.isBlank() }
         val payload = ExportPayload(
             schema = "sonorus.conversation/v1",
             exportedAt = System.currentTimeMillis(),
@@ -89,7 +100,7 @@ object ConversationExporter {
             modelId = conversation.modelId,
             createdAt = conversation.createdAt,
             systemPrompt = conversation.systemPrompt,
-            messages = messages.map { m ->
+            messages = rendered.map { m ->
                 ExportMessage(
                     role = m.role.name.lowercase(),
                     content = m.content,
@@ -107,7 +118,8 @@ object ConversationExporter {
                         }
                     } else emptyList(),
                     // 图片仅保留元数据，避免 JSON 文件动辄数十 MB
-                    images = m.images.map { ExportImage(mimeType = it.mimeType, bytes = it.base64.length) }
+                    images = m.images.map { ExportImage(mimeType = it.mimeType, bytes = it.base64.length) },
+                    files = m.files.map { ExportFile(name = it.name, chars = it.text.length) }
                 )
             }
         )
@@ -181,7 +193,8 @@ object ConversationExporter {
         val reasoning: String? = null,
         /** 多版本回答的全部版本；单版本恒为空数组 */
         val versions: List<ExportVersion> = emptyList(),
-        val images: List<ExportImage> = emptyList()
+        val images: List<ExportImage> = emptyList(),
+        val files: List<ExportFile> = emptyList()
     )
 
     @Serializable
@@ -198,5 +211,12 @@ object ConversationExporter {
         val mimeType: String,
         /** base64 字符串长度；不导出实际字节，防止文件体积爆炸 */
         val bytes: Int
+    )
+
+    @Serializable
+    private data class ExportFile(
+        val name: String,
+        /** 文本字符数；正文不导出，与图片同样只留元数据 */
+        val chars: Int
     )
 }

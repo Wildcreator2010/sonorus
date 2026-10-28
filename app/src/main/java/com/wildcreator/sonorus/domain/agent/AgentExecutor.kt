@@ -8,6 +8,10 @@ import com.wildcreator.sonorus.data.remote.redactSecrets
 import com.wildcreator.sonorus.domain.model.AnswerVersion
 import com.wildcreator.sonorus.domain.model.ImageAttachment
 import com.wildcreator.sonorus.domain.model.MessageVariants
+import com.wildcreator.sonorus.domain.model.TextAttachment
+import com.wildcreator.sonorus.domain.model.decodeTextAttachments
+import com.wildcreator.sonorus.domain.model.encodeTextAttachments
+import com.wildcreator.sonorus.domain.model.withTextAttachments
 import com.wildcreator.sonorus.domain.repository.ProviderRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -110,12 +115,62 @@ class AgentExecutor @Inject constructor(
     @Volatile
     private var currentJob: kotlinx.coroutines.Job? = null
 
+    /**
+     * 单槽位的原子占用标记。
+     * 不能只靠 state.running 判断：那是在第一条消息落库之后才置真的，
+     * 两次快速点击发送都能穿过检查，后一次会覆盖前一次的 job 与状态。
+     */
+    private val runInProgress = AtomicBoolean(false)
+
     @Volatile
     private var tokenScale = 1.0
 
     /** 停止生成：取消当前请求，已流出的内容作为一版回答落库 */
     fun stop() {
         currentJob?.cancel()
+    }
+
+    private suspend fun beginRun(conversationId: Long): Boolean {
+        if (!runInProgress.compareAndSet(false, true)) return false
+        currentJob = currentCoroutineContext().job
+        // 立刻对外可见：首条用户消息还在写库时，别的页面也不能再发起第二轮
+        _state.value = AgentState(
+            running = true,
+            phase = RunPhase.WAITING,
+            conversationId = conversationId,
+            startedAt = System.currentTimeMillis()
+        )
+        return true
+    }
+
+    private fun finishRun() {
+        currentJob = null
+        runInProgress.set(false)
+    }
+
+    /**
+     * 占槽 + 收口。开始阶段的写库失败同样必须复位状态：
+     * 只在 runRound 里复位会漏掉"第一条用户消息没写进去"这类启动期异常，
+     * 它们会让 running 永久停在 true，把所有会话的发送都锁死。
+     */
+    private suspend fun <T> runClaimed(conversationId: Long, block: suspend () -> T): T? {
+        if (!beginRun(conversationId)) return null
+        try {
+            return block()
+        } catch (e: CancellationException) {
+            if (_state.value.conversationId == conversationId) {
+                _state.value = AgentState(conversationId = conversationId)
+            }
+            throw e
+        } catch (e: Exception) {
+            _state.value = AgentState(
+                conversationId = conversationId,
+                error = "本轮未能开始：${redactSecrets(e.message ?: e.javaClass.simpleName)}"
+            )
+            return null
+        } finally {
+            finishRun()
+        }
     }
 
     /**
@@ -136,12 +191,15 @@ class AgentExecutor @Inject constructor(
     suspend fun send(
         conversationId: Long,
         userText: String,
-        images: List<ImageAttachment> = emptyList()
+        images: List<ImageAttachment> = emptyList(),
+        files: List<TextAttachment> = emptyList()
     ) {
-        val anchorId = withContext(Dispatchers.IO) {
-            chatDao.insertMessage(userMessageEntity(conversationId, userText, images))
+        runClaimed(conversationId) {
+            val anchorId = withContext(Dispatchers.IO) {
+                chatDao.insertMessage(userMessageEntity(conversationId, userText, images, files))
+            }
+            runRound(conversationId, anchorId = anchorId, retired = null, instruction = null, note = null)
         }
-        runRound(conversationId, anchorId = anchorId, retired = null, instruction = null, note = null)
     }
 
     /**
@@ -155,54 +213,69 @@ class AgentExecutor @Inject constructor(
         conversationId: Long,
         fromMessageId: Long,
         userText: String,
-        images: List<ImageAttachment> = emptyList()
+        images: List<ImageAttachment> = emptyList(),
+        files: List<TextAttachment> = emptyList()
     ) {
-        val anchorId = withContext(Dispatchers.IO) {
-            chatDao.replaceTailWithUserMessage(
-                conversationId,
-                fromMessageId,
-                userMessageEntity(conversationId, userText, images)
-            )
+        runClaimed(conversationId) {
+            val anchorId = withContext(Dispatchers.IO) {
+                chatDao.replaceTailWithUserMessage(
+                    conversationId,
+                    fromMessageId,
+                    userMessageEntity(conversationId, userText, images, files)
+                )
+            }
+            runRound(conversationId, anchorId = anchorId, retired = null, instruction = null, note = null)
         }
-        runRound(conversationId, anchorId = anchorId, retired = null, instruction = null, note = null)
     }
 
     private fun userMessageEntity(
         conversationId: Long,
         userText: String,
-        images: List<ImageAttachment>
+        images: List<ImageAttachment>,
+        files: List<TextAttachment> = emptyList()
     ): MessageEntity = MessageEntity(
         conversationId = conversationId,
         role = "user",
         content = userText,
         imagesJson = images.takeIf { it.isNotEmpty() }?.let {
             imageJson.encodeToString(ListSerializer(ImageAttachment.serializer()), it)
-        }
+        },
+        filesJson = files.encodeTextAttachments()
     )
 
     /** 重新生成最后一条回答；没有可重生的回答时返回 false，由 UI 提示用户 */
-    suspend fun regenerateLast(conversationId: Long): Boolean {
-        val anchor = chatDao.getLastUserMessage(conversationId) ?: return false
+    suspend fun regenerateLast(conversationId: Long): Boolean = runClaimed(conversationId) {
+        val anchor = chatDao.getLastUserMessage(conversationId) ?: run {
+            _state.value = AgentState(conversationId = conversationId)
+            return@runClaimed false
+        }
         runRound(conversationId, anchorId = anchor.id, retired = retiredOf(conversationId, anchor.id), instruction = null, note = null)
-        return true
-    }
+        true
+    } ?: false
 
     /**
      * 按批注修改最后一条回答。
      * @param quote 用户选中的原文片段，null 表示整条批注
      */
-    suspend fun reviseLastWithNote(conversationId: Long, quote: String?, note: String): Boolean {
-        val anchor = chatDao.getLastUserMessage(conversationId) ?: return false
-        val retired = retiredOf(conversationId, anchor.id) ?: return false
-        runRound(
-            conversationId,
-            anchorId = anchor.id,
-            retired = retired,
-            instruction = MessageVariants.revisionInstruction(quote, note),
-            note = note.trim()
-        )
-        return true
-    }
+    suspend fun reviseLastWithNote(conversationId: Long, quote: String?, note: String): Boolean =
+        runClaimed(conversationId) {
+            val anchor = chatDao.getLastUserMessage(conversationId) ?: run {
+                _state.value = AgentState(conversationId = conversationId)
+                return@runClaimed false
+            }
+            val retired = retiredOf(conversationId, anchor.id) ?: run {
+                _state.value = AgentState(conversationId = conversationId)
+                return@runClaimed false
+            }
+            runRound(
+                conversationId,
+                anchorId = anchor.id,
+                retired = retired,
+                instruction = MessageVariants.revisionInstruction(quote, note),
+                note = note.trim()
+            )
+            true
+        } ?: false
 
     /** 被替换掉的那次尝试：历史版本列表 + 当前生效文本 */
     private data class Retired(
@@ -230,7 +303,6 @@ class AgentExecutor @Inject constructor(
         instruction: String?,
         note: String?
     ) = withContext(Dispatchers.IO) {
-        currentJob = currentCoroutineContext().job
         val contentSb = StringBuilder()
         val reasoningSb = StringBuilder()
         try {
@@ -458,15 +530,18 @@ class AgentExecutor @Inject constructor(
                 "工具调用轮次超限（$maxIterations）"
             )
         } catch (e: CancellationException) {
-            // 用户点了停止：已流出的内容仍算一版回答，不能丢；一条都没流出时要把旧答案放回去
+            // 用户点了停止：已流出的内容仍算一版回答，不能丢；一条都没流出时要把旧答案放回去。
+            // 清理阶段的落库失败必须被吞掉——否则 running 永远卡在 true，所有会话都发不出去。
             withContext(NonCancellable) {
-                if (contentSb.isNotEmpty()) {
-                    persistAnswer(
-                        conversationId, retired, note,
-                        contentSb.toString(), reasoningSb.toString()
-                    )
-                } else {
-                    restoreRetired(conversationId, retired)
+                runCatching {
+                    if (contentSb.isNotEmpty()) {
+                        persistAnswer(
+                            conversationId, retired, note,
+                            contentSb.toString(), reasoningSb.toString()
+                        )
+                    } else {
+                        restoreRetired(conversationId, retired)
+                    }
                 }
             }
             _state.value = AgentState(
@@ -483,8 +558,6 @@ class AgentExecutor @Inject constructor(
                 conversationId = conversationId,
                 error = "本轮异常终止：${redactSecrets(e.message ?: e.javaClass.simpleName)}"
             )
-        } finally {
-            currentJob = null
         }
     }
 
@@ -496,9 +569,6 @@ class AgentExecutor @Inject constructor(
         content: String,
         reasoning: String
     ) {
-        // 会话可能已被删除：列表页删会话会取消本回合，但落库跑在 NonCancellable 里挡不住，
-        // 不在这里收口就会给已删会话留下孤儿消息。
-        if (chatDao.getConversation(conversationId) == null) return
         val next = AnswerVersion(
             content = content,
             reasoning = reasoning.takeIf { it.isNotBlank() },
@@ -506,7 +576,9 @@ class AgentExecutor @Inject constructor(
         )
         val versions = retired?.let { MessageVariants.append(it.versions, next) } ?: listOf(next)
         val (mirror, versionsJson, active) = MessageVariants.entry(versions, versions.lastIndex)
-        chatDao.insertMessage(
+        // 会话可能已被删除：检查与插入必须在同一个事务里，
+        // 否则"刚查过还在、插入前被删"的窗口会留下孤儿消息。
+        val inserted = chatDao.insertMessageIfConversationExists(
             MessageEntity(
                 conversationId = conversationId,
                 role = "assistant",
@@ -515,6 +587,7 @@ class AgentExecutor @Inject constructor(
                 activeVersion = active
             )
         )
+        if (!inserted) return
         chatDao.getConversation(conversationId)?.let {
             chatDao.upsertConversation(it.copy(updatedAt = System.currentTimeMillis()))
         }
@@ -695,7 +768,8 @@ class AgentExecutor @Inject constructor(
             when (m.role) {
                 "user" -> result += UnifiedMessage(
                     role = UnifiedRole.USER,
-                    text = m.content,
+                    // 附件正文只在送模型时拼接；库里的 content 保持用户原话，界面不会被文件内容淹没
+                    text = m.content.withTextAttachments(m.filesJson.decodeTextAttachments()),
                     images = m.imagesJson?.let {
                         runCatching {
                             imageJson.decodeFromString(ListSerializer(ImageAttachment.serializer()), it)

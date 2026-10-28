@@ -44,6 +44,7 @@ let failures = 0;
 const check = (label, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ' — ' + detail : ''}`);
   if (!ok) failures++;
+  return ok;
 };
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
@@ -112,8 +113,10 @@ async function main() {
   const tag = option('--tag', declared ? `v${declared}` : '');
   console.log(`本地产物：${apkPath}  ${local.length} 字节  sha256=${localHash}\n`);
 
-  check('--tag 与 build.gradle.kts 的 versionName 一致', !!tag && !!declared && tag === `v${declared}`,
+  const tagMatches = check('--tag 与 build.gradle.kts 的 versionName 一致',
+    !!tag && !!declared && tag === `v${declared}`,
     `tag=${tag || '未给'} / versionName=${declared || '未读到'}`);
+  if (!tagMatches) return finish();
 
   const auth = { Authorization: `Bearer ${token}` };
   const listRes = await request(`https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`, { headers: auth });
@@ -126,8 +129,10 @@ async function main() {
   if (!release) return finish();
 
   const bodyMatch = SHA256_REGEX.exec(release.body || '');
-  check('正文里的 sha256 与本地产物一致', !!bodyMatch && bodyMatch[1].toLowerCase() === localHash,
+  const hashMatches = check('正文里的 sha256 与本地产物一致',
+    !!bodyMatch && bodyMatch[1].toLowerCase() === localHash,
     bodyMatch ? `正文=${bodyMatch[1].slice(0, 16)}… 本地=${localHash.slice(0, 16)}…` : '正文没有 sha256 —— 应用内更新会拒装，先发正文补上');
+  if (!hashMatches) return finish();
 
   const existing = (release.assets ?? []).find((a) => a.name === ASSET_NAME);
   if (existing) {
@@ -152,8 +157,9 @@ async function main() {
     `HTTP ${uploaded.status}${asset?.message ? '：' + asset.message : ''}`);
   if (uploaded.status !== 201) return finish();
 
-  check('GitHub 记录的字节数与本地相同', asset.size === local.length, `${asset.size} vs ${local.length}`);
-  check('GitHub 记录的 content_type 是 apk 类型', asset.content_type === APK_MIME, asset.content_type);
+  const sizeMatches = check('GitHub 记录的字节数与本地相同', asset.size === local.length, `${asset.size} vs ${local.length}`);
+  const typeMatches = check('GitHub 记录的 content_type 是 apk 类型', asset.content_type === APK_MIME, asset.content_type);
+  if (!sizeMatches || !typeMatches) return finish();
   console.log(`　下载地址：${asset.browser_download_url}`);
 
   if (shouldPublish) {

@@ -112,13 +112,18 @@ class OpenAiCompatAdapter @Inject constructor(
         val inputTokens = root.obj("usage")?.get("prompt_tokens").asIntOrNull() ?: root.obj("usage")?.get("input_tokens").asIntOrNull()
         val choice = root.arr("choices")?.firstOrNull().asObject()
         if (choice == null) return inputTokens?.let { StreamDelta(inputTokens = it) }
-        val delta = choice.obj("delta")
-        val text = delta?.get("content").asText()
+        // 有的网关把完整 message 塞进一帧 data: 里，而不是逐 token 的 delta；
+        // 少数兼容层还会走 completions 形态，正文在 choice.text
+        val payload = choice.obj("delta") ?: choice.obj("message")
+        // 拒绝回答是给用户看的正文，不是"空内容"；部分网关只回 refusal
+        val text = payload?.get("content").asContentText()
+            ?: payload?.get("refusal").asText()
+            ?: choice["text"].asContentText()
         // 推理增量：DeepSeek / 通义 / Qwen 等用 reasoning_content，部分网关（xAI、OpenRouter）用 reasoning
-        val reasoning = (delta?.get("reasoning_content").asText() ?: delta?.get("reasoning").asText())
+        val reasoning = (payload?.get("reasoning_content").asContentText() ?: payload?.get("reasoning").asContentText())
             ?.takeIf { it.isNotEmpty() }
 
-        val toolCalls = delta?.arr("tool_calls")?.mapNotNull { element ->
+        val toolCalls = payload?.arr("tool_calls")?.mapNotNull { element ->
             val obj = element.asObject() ?: return@mapNotNull null
             val fn = obj.obj("function")
             val hasAny = obj["id"] != null || fn != null
@@ -131,7 +136,42 @@ class OpenAiCompatAdapter @Inject constructor(
             )
         }?.takeIf { it.isNotEmpty() }
 
-        val finish = choice["finish_reason"].asText()?.let { reason ->
+        val finish = choice.finishReason()
+
+        return if (text == null && reasoning == null && toolCalls == null && finish == null && inputTokens == null) null
+        else StreamDelta(text = text, reasoning = reasoning, toolCalls = toolCalls, finish = finish, inputTokens = inputTokens)
+    }
+
+    /** 完整（非流式）响应：网关忽略 stream=true 时不能把它当成空回答 */
+    override fun parseNonStream(body: String): StreamDelta? {
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+        root.obj("error")?.let {
+            return StreamDelta(error = it.text("message") ?: "上游返回错误")
+        }
+        val choice = root.arr("choices")?.firstOrNull().asObject() ?: return null
+        val message = choice.obj("message")
+        val text = message?.get("content").asContentText()
+            ?: message?.get("refusal").asText()
+            ?: choice["text"].asContentText()
+        val reasoning = (message?.get("reasoning_content").asContentText()
+            ?: message?.get("reasoning").asContentText())?.takeIf { it.isNotEmpty() }
+        val toolCalls = message?.arr("tool_calls")?.mapIndexedNotNull { index, element ->
+            val obj = element.asObject() ?: return@mapIndexedNotNull null
+            val fn = obj.obj("function") ?: return@mapIndexedNotNull null
+            ToolCallDelta(
+                index = index,
+                id = obj.text("id"),
+                nameSet = fn.text("name"),
+                argsSet = fn.text("arguments")
+            )
+        }?.takeIf { it.isNotEmpty() }
+        val finish = choice.finishReason()
+        return if (text == null && reasoning == null && toolCalls == null && finish == null) null
+        else StreamDelta(text = text, reasoning = reasoning, toolCalls = toolCalls, finish = finish)
+    }
+
+    private fun kotlinx.serialization.json.JsonObject.finishReason(): FinishReason? =
+        this["finish_reason"].asText()?.let { reason ->
             when (reason) {
                 "tool_calls", "function_call" -> FinishReason.TOOL_CALLS
                 // 被长度上限截断：内容不完整，不能当正常收尾
@@ -140,10 +180,6 @@ class OpenAiCompatAdapter @Inject constructor(
                 else -> FinishReason.STOP
             }
         }
-
-        return if (text == null && reasoning == null && toolCalls == null && finish == null && inputTokens == null) null
-        else StreamDelta(text = text, reasoning = reasoning, toolCalls = toolCalls, finish = finish, inputTokens = inputTokens)
-    }
 
     private fun UnifiedMessage.toWire(): JsonObject = buildJsonObject {
         when (role) {

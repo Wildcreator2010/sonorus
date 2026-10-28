@@ -3,6 +3,7 @@ package com.wildcreator.sonorus.data.remote.protocol
 import com.wildcreator.sonorus.bodyJson
 import com.wildcreator.sonorus.str
 import com.wildcreator.sonorus.domain.agent.FinishReason
+import com.wildcreator.sonorus.domain.agent.ImagePart
 import com.wildcreator.sonorus.domain.agent.ToolCall
 import com.wildcreator.sonorus.domain.agent.UnifiedChatRequest
 import com.wildcreator.sonorus.domain.agent.UnifiedMessage
@@ -134,6 +135,25 @@ class AnthropicAdapterTest {
     }
 
     @Test
+    fun chatRequest_纯图片消息不生成空文本块() {
+        val request = baseRequest().copy(
+            systemPrompt = null,
+            messages = listOf(
+                UnifiedMessage(
+                    role = UnifiedRole.USER,
+                    text = "",
+                    images = listOf(ImagePart("image/png", "AAAA"))
+                )
+            )
+        )
+        val payload = adapter.chatRequest("https://api.anthropic.com/v1", "sk-ant", request).bodyJson()
+        val blocks = payload["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+
+        assertEquals(1, blocks.size)
+        assertEquals("image", blocks[0].jsonObject.str("type"))
+    }
+
+    @Test
     fun chatRequest_空消息列表兜底一条user() {
         val payload = adapter.chatRequest(
             "https://api.anthropic.com/v1",
@@ -197,6 +217,22 @@ class AnthropicAdapterTest {
     fun parseStream_缺少type时回退到event字段() {
         val data = """{"index":0,"delta":{"type":"text_delta","text":"回退"}}"""
         assertEquals("回退", adapter.parseStream("content_block_delta", data)!!.text)
+    }
+
+    @Test
+    fun parseNonStream_多个工具块各自保留下标() {
+        val delta = adapter.parseNonStream(
+            """
+            {"type":"message","role":"assistant","stop_reason":"tool_use","content":[
+              {"type":"tool_use","id":"toolu_1","name":"get_time","input":{"tz":"UTC"}},
+              {"type":"tool_use","id":"toolu_2","name":"calculator","input":{"expr":"1+1"}}
+            ]}
+            """.trimIndent()
+        )!!
+        assertEquals(FinishReason.TOOL_CALLS, delta.finish)
+        assertEquals(listOf(0, 1), delta.toolCalls!!.map { it.index })
+        assertEquals("toolu_2", delta.toolCalls!![1].id)
+        assertEquals("""{"expr":"1+1"}""", delta.toolCalls!![1].argsSet)
     }
 
     @Test

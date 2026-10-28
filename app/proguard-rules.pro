@@ -19,7 +19,7 @@
 -keepclassmembers class * {
     @kotlinx.serialization.Serializable <methods>;
 }
--keep,includedescriptorclasses class com.wildcreator.wildadaptor.**$$serializer { *; }
+-keep,includedescriptorclasses class com.wildcreator.sonorus.**$$serializer { *; }
 
 # ---------- OkHttp / Okio ----------
 -dontwarn okhttp3.**

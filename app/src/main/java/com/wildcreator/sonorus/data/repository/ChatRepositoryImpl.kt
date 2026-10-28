@@ -10,6 +10,7 @@ import com.wildcreator.sonorus.domain.model.ChatRole
 import com.wildcreator.sonorus.domain.model.Conversation
 import com.wildcreator.sonorus.domain.model.ImageAttachment
 import com.wildcreator.sonorus.domain.model.MessageVariants
+import com.wildcreator.sonorus.domain.model.decodeTextAttachments
 import com.wildcreator.sonorus.domain.repository.ChatRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -105,8 +106,7 @@ class ChatRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteConversation(id: Long) {
-        chatDao.deleteMessagesFor(id)
-        chatDao.deleteConversation(id)
+        chatDao.deleteConversationWithMessages(id)
     }
 
     override fun observeMessages(conversationId: Long): Flow<List<ChatMessage>> =
@@ -141,6 +141,7 @@ internal fun MessageEntity.toDomain(): ChatMessage {
         content = list.getOrNull(active)?.content?.takeIf { it.isNotBlank() } ?: content,
         toolName = toolName,
         images = imagesJson.decodeImages(),
+        files = filesJson.decodeTextAttachments(),
         versions = list,
         activeVersion = active
     )

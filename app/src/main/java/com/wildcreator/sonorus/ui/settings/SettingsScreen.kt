@@ -5,12 +5,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -30,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -44,7 +47,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -52,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.wildcreator.sonorus.domain.agent.ThinkingLevel
+import com.wildcreator.sonorus.ui.theme.ChatBackground
 import com.wildcreator.sonorus.ui.theme.FontScale
 import com.wildcreator.sonorus.ui.theme.ThemeMode
 import com.wildcreator.sonorus.ui.update.UpdateSettingsCard
@@ -152,6 +159,9 @@ fun SettingsScreen(
                             )
                         }
                     }
+
+                    HorizontalDivider()
+                    ChatBackgroundControls(viewModel, snackbar)
                 }
             }
 
@@ -354,6 +364,72 @@ fun SettingsScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChatBackgroundControls(viewModel: SettingsViewModel, snackbar: SnackbarHostState) {
+    val background by viewModel.chatBackground.collectAsStateWithLifecycle()
+    val busy by viewModel.backgroundBusy.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
+    var opacity by remember(background.path, background.opacity) { mutableStateOf(background.opacity) }
+    val showError: (String?) -> Unit = { message ->
+        if (message != null) scope.launch { snackbar.showSnackbar(message) }
+    }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) viewModel.importChatBackground(uri, showError)
+    }
+
+    Text("聊天背景", style = MaterialTheme.typography.labelLarge)
+    Text(
+        "仅用于聊天页，图片保存在本机，不会发送给模型或加入备份。支持不超过 20 MB 的图片。",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Box(
+        modifier = Modifier.fillMaxWidth().height(160.dp).clip(MaterialTheme.shapes.medium)
+            .semantics { contentDescription = "聊天背景预览" },
+        contentAlignment = Alignment.Center
+    ) {
+        ChatBackground(
+            modifier = Modifier.matchParentSize(),
+            background = background.copy(opacity = opacity),
+            onError = showError
+        )
+        if (background.path == null) Text("默认背景", color = MaterialTheme.colorScheme.onBackground)
+    }
+    Text("压暗强度 ${(opacity * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
+    Slider(
+        value = opacity,
+        onValueChange = { opacity = it },
+        onValueChangeFinished = {
+            viewModel.saveChatBackgroundOpacity(opacity) { error ->
+                if (error != null) opacity = background.opacity
+                showError(error)
+            }
+        },
+        valueRange = 0f..1f,
+        enabled = !busy && background.path != null,
+        modifier = Modifier.semantics { contentDescription = "聊天背景压暗强度" }
+    )
+    Text("0% 最亮 · 100% 最暗", style = MaterialTheme.typography.bodySmall)
+    if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            enabled = !busy,
+            onClick = {
+                try {
+                    picker.launch(arrayOf("image/*"))
+                } catch (e: Exception) {
+                    showError("无法打开图片选择器，请检查系统文件应用")
+                }
+            }
+        ) { Text(if (background.path == null) "选择背景图" else "更换背景图") }
+        TextButton(
+            enabled = !busy && background.path != null,
+            onClick = { viewModel.resetChatBackground(showError) }
+        ) { Text("恢复默认") }
+    }
+}
+
 /**
  * 备份与恢复。
  *
@@ -378,10 +454,11 @@ private fun BackupCard(viewModel: SettingsViewModel, snackbar: SnackbarHostState
     val createBackup = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream")
     ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
+        // 先清空再判断：用户取消文件选择器时，口令也不能继续留在输入框状态里
         val passphrase = exportPassphrase
         exportPassphrase = ""
         exportConfirm = ""
+        if (uri == null) return@rememberLauncherForActivityResult
         viewModel.exportBackup(uri, passphrase) { message ->
             scope.launch { snackbar.showSnackbar(message) }
         }

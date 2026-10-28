@@ -269,6 +269,7 @@ class BackupManager @Inject constructor(
             val rows = db.chatDao().getMessages(conv.id)
             val cost = rows.sumOf { row ->
                 row.content.length + (row.imagesJson?.length ?: 0) +
+                    (row.filesJson?.length ?: 0) +
                     (row.toolCallsJson?.length ?: 0) + (row.versionsJson?.length ?: 0)
             } + conv.title.length + conv.systemPrompt.length
             budget -= cost
@@ -371,6 +372,7 @@ class BackupManager @Inject constructor(
         role = role,
         content = content,
         imagesJson = imagesJson,
+        filesJson = filesJson,
         toolCallsJson = toolCallsJson,
         toolCallId = toolCallId,
         toolName = toolName,
@@ -383,6 +385,7 @@ class BackupManager @Inject constructor(
         role = role,
         content = content,
         imagesJson = imagesJson,
+        filesJson = filesJson,
         toolCallsJson = toolCallsJson,
         toolCallId = toolCallId,
         toolName = toolName,
