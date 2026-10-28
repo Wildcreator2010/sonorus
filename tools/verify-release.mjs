@@ -162,14 +162,33 @@ async function main() {
     check('正文 sha256 与本地产物一致', m[1].toLowerCase() === localHash, `正文=${m[1].slice(0, 16)}… 本地=${localHash.slice(0, 16)}…`);
   }
 
-  const downloaded = await get(apk.browser_download_url);
-  const remoteHash = sha256(downloaded.body);
-  check('远端资源字节与本地相同', downloaded.status === 200 && remoteHash === localHash, `远端=${remoteHash.slice(0, 16)}…`);
-  check(
-    '远端资源大小与本地相同',
-    downloaded.body.length === local.length,
-    `${downloaded.body.length} vs ${local.length}`
-  );
+  let downloaded = null;
+  try {
+    downloaded = await get(apk.browser_download_url);
+  } catch {
+    // github.com 的下载链路在本机经常被 ECONNRESET 掐断；GitHub 对资源存的 digest
+    // 是服务端字节的 sha256，比"下载回来后自己算"更强，也更省用户的网络。
+  }
+
+  if (downloaded) {
+    const remoteHash = sha256(downloaded.body);
+    check('远端资源字节与本地相同', downloaded.status === 200 && remoteHash === localHash, `远端=${remoteHash.slice(0, 16)}…`);
+    check(
+      '远端资源大小与本地相同',
+      downloaded.body.length === local.length,
+      `${downloaded.body.length} vs ${local.length}`
+    );
+  } else {
+    const assetRes = await get(`https://api.github.com/repos/${OWNER}/${REPO}/releases/assets/${apk.id}`);
+    const digest = assetRes.status === 200 ? JSON.parse(assetRes.body.toString()).digest : null;
+    const digestHash = String(digest || '').replace(/^sha256:/, '').toLowerCase();
+    check(
+      '下载被网络阻断，改用 GitHub API digest 校验',
+      digestHash === localHash,
+      digest ? `digest=${digestHash.slice(0, 16)}…` : 'API 未返回 digest'
+    );
+    check('远端资源大小与本地相同', apk.size === local.length, `${apk.size} vs ${local.length}`);
+  }
 
   check('按 ReleaseParser 规则版本不比自身旧', versionCompare(version, declared) >= 0, `compare=${versionCompare(version, declared)}`);
 
